@@ -41,6 +41,14 @@ class GaussianMixture:
         prob = np.dot(component_pdf, self.norm_weights)
         return prob
 
+    def pdf_decompose(self, x):
+        """
+          probability density (PDF) at $x$.
+        """
+        component_pdf = np.array([rv.pdf(x) for rv in self.RVs]).T
+        prob = np.dot(component_pdf, self.norm_weights)
+        return prob, component_pdf
+
     def score(self, x):
         """
         Compute the score $\nabla_x \log p(x)$ for the given $x$.
@@ -127,6 +135,7 @@ class GaussianMixture_torch:
         self.weights.append(weight)
         self.norm_weights = self.weights / self.weights.sum()
         self.n_component += 1
+
 
     def pdf(self, x):
         """
