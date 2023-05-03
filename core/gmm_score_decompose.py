@@ -1,6 +1,9 @@
-
-%load_ext autoreload
-%autoreload 2
+"""
+A demo figure for NeuroMatch 2023 tutorial
+Showing that the optimal direction for denoising is the gradient of the log probability
+"""
+# %load_ext autoreload
+# %autoreload 2
 #%%
 from core.gaussian_mixture_lib import GaussianMixture
 import numpy as np
