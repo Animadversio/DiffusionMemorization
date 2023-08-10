@@ -220,9 +220,9 @@ dist_NN_NN = cdist(X_train_tsr, x_traj_denoise_NN[:, :, -1]).min(axis=0)
 #%%
 plt.figure(figsize=(5, 4))
 plt.hist(dist_NN_analy, bins=np.linspace(0, 1, 101),
-         alpha=0.5, label="analytical score")
+         alpha=0.35, label="analytical score", color="r")
 plt.hist(dist_NN_NN, bins=np.linspace(0, 1, 101),
-         alpha=0.5, label="NN score")
+         alpha=0.35, label="NN score", color="b")
 plt.legend()
 plt.xlabel("L2 Distance to nearest training data")
 plt.ylabel("Count")
@@ -240,6 +240,7 @@ plt.legend()
 plt.show()
 
 #%% Characterize error across time
+"""Compute the MSE loss of score over time"""
 import pandas as pd
 score_model_td3.eval()
 score_model_td3.cpu()
@@ -275,31 +276,28 @@ df_td = pd.DataFrame(df_col)
 df_td.to_csv(join(figdir, "mse_score_field_time_dep.csv"))
 #%%
 plt.figure(figsize=(6, 5))
-plt.plot(df_td["t"], df_td["mse"], label="Time Dependent NN trained from weighted denoising")
+plt.plot(df_td["t"], df_td["mse"], )
 plt.xlabel("Diffusion time")
 plt.ylabel("MSE")
-plt.title("MSE of score field Estimated with p_t(x) across time")
-plt.legend()
+plt.title("MSE of NN estimated score field and p_t(x) score field")
 saveallforms(figdir, "mse_score_field_expectation_p_xt", )
 plt.show()
 
 #%%
 plt.figure(figsize=(6, 5))
-plt.plot(df_td["t"], df_td["mse_t0"], label="Time Dependent NN trained from weighted denoising")
+plt.plot(df_td["t"], df_td["mse_t0"], )#label="Time Dependent NN trained from weighted denoising")
 plt.xlabel("Diffusion time")
 plt.ylabel("MSE")
-plt.title("MSE of score field Estimated with p_t(x) across time")
-plt.legend()
+plt.title("MSE of NN estimated score field and p_0(x) score field")
 saveallforms(figdir, "mse_score_field_expectation_p_x0", )
 plt.show()
 
 #%%
 plt.figure(figsize=(6, 5))
-plt.plot(df_td["t"], df_td["mse_t1"], label="Time Dependent NN trained from weighted denoising")
+plt.plot(df_td["t"], df_td["mse_t1"], )#label="Time Dependent NN trained from weighted denoising")
 plt.xlabel("Diffusion time")
 plt.ylabel("MSE")
-plt.title("MSE of score field Estimated with p_t(x) across time")
-plt.legend()
+plt.title("MSE of NN estimated score field and p_1(x) score field")
 saveallforms(figdir, "mse_score_field_expectation_p_x1", )
 plt.show()
 
@@ -307,7 +305,9 @@ plt.show()
 
 
 #%%
-# visualize the trained score model's score field vs the original score field
+"""
+visualize the trained score model's score field vs the original score field and make animation out of it. 
+"""
 score_model_td3.eval()
 score_model_td3.cpu()
 for t in np.arange(0, 1.01, 0.025):
@@ -324,7 +324,6 @@ for t in np.arange(0, 1.01, 0.025):
   density_analy = delta_gmm_t.pdf(xy.numpy()).reshape(100, 100)
   scoremap_nn = scorevec_nn[:,:].reshape(100,100,-1)
   scoremap_analy = scorevec_analy[:,:].reshape(100,100,-1)
-  #%%
   # subslc = slice(None, None, 6)
   subslc = slice(None, None, 4)
   plt.figure(figsize=(7, 7))
@@ -345,10 +344,7 @@ for t in np.arange(0, 1.01, 0.025):
   plt.legend()
   saveallforms(figdir, f"scorefield_comparison_t{time_th.item():.3f}_dense_focus")
   plt.show()
-  # break
 
-
-#%%
 
 #%%
 # make the gif out of the figurs
