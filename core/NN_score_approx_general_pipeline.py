@@ -85,19 +85,27 @@ class GaussianFourierProjection(nn.Module):
 class ScoreModel_Time(nn.Module):
   """A time-dependent score-based model."""
 
-  def __init__(self, sigma, ndim=2, nhidden=50, time_embed_dim=10,
+  def __init__(self, sigma, ndim=2, nlayers=5, nhidden=50, time_embed_dim=10,
                act_fun=nn.Tanh):
     super().__init__()
     self.embed = GaussianFourierProjection(time_embed_dim, scale=1)
-    self.net = nn.Sequential(nn.Linear(time_embed_dim + ndim, nhidden),
-               act_fun(),
-               nn.Linear(nhidden, nhidden),
-               act_fun(),
-               nn.Linear(nhidden, nhidden),
-               act_fun(),
-               nn.Linear(nhidden, nhidden),
-               act_fun(),
-               nn.Linear(nhidden, ndim))
+    layers = []
+    layers.extend([nn.Linear(time_embed_dim + ndim, nhidden),
+                   act_fun()])
+    for _ in range(nlayers-2):
+        layers.extend([nn.Linear(nhidden, nhidden),
+                         act_fun()])
+    layers.extend([nn.Linear(nhidden, ndim)])
+    self.net = nn.Sequential(*layers)
+    # self.net = nn.Sequential(nn.Linear(time_embed_dim + ndim, nhidden),
+    #            act_fun(),
+    #            nn.Linear(nhidden, nhidden),
+    #            act_fun(),
+    #            nn.Linear(nhidden, nhidden),
+    #            act_fun(),
+    #            nn.Linear(nhidden, nhidden),
+    #            act_fun(),
+    #            nn.Linear(nhidden, ndim))
     self.marginal_prob_std_f = lambda t: marginal_prob_std(t, sigma)
 
   def forward(self, x, t):
@@ -114,19 +122,16 @@ class ScoreModel_Time(nn.Module):
 class ScoreModel_Time_edm(nn.Module):
   """A time-dependent score-based model."""
 
-  def __init__(self, sigma, ndim=2, nhidden=50, time_embed_dim=10,
+  def __init__(self, sigma, ndim=2, nlayers=5, nhidden=50, time_embed_dim=10,
                act_fun=nn.Tanh):
     super().__init__()
     self.embed = GaussianFourierProjection(time_embed_dim, scale=1)
-    self.net = nn.Sequential(nn.Linear(time_embed_dim + ndim, nhidden),
-               act_fun(),
-               nn.Linear(nhidden, nhidden),
-               act_fun(),
-               nn.Linear(nhidden, nhidden),
-               act_fun(),
-               nn.Linear(nhidden, nhidden),
-               act_fun(),
-               nn.Linear(nhidden, ndim))
+    layers = []
+    layers.extend([nn.Linear(time_embed_dim + ndim, nhidden), act_fun()])
+    for _ in range(nlayers - 2):
+        layers.extend([nn.Linear(nhidden, nhidden), act_fun()])
+    layers.extend([nn.Linear(nhidden, ndim)])
+    self.net = nn.Sequential(*layers)
     self.marginal_prob_std_f = lambda t: marginal_prob_std(t, sigma)
 
   def forward(self, x, t):
