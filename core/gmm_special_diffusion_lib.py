@@ -46,6 +46,42 @@ def GMM_scores(mus, sigma, x):
     scores = - np.einsum("ij,ijk->ik", participance, res) / sigma2   # [x batch, space dim]
     return scores
 
+import math
+import torch
+import torch.nn.functional as F
+def GMM_density_torch(mus, sigma, x):
+    Nbranch = mus.shape[0]
+    Ndim = mus.shape[1]
+    sigma = torch.tensor(sigma)
+    sigma2 = sigma**2
+    normfactor = math.sqrt((2 * torch.pi * sigma)**Ndim)
+    res = x[:, None, :] - mus[None, :, :]  # [x batch, mu, space dim]
+    dist2 = torch.sum(res ** 2, dim=-1)  # [x batch, mu]
+    prob = torch.exp(- dist2 / sigma2 / 2)  # [x batch, mu]
+    prob_all = torch.sum(prob, dim=1) / Nbranch / normfactor  # [x batch,]
+    return prob_all
+
+
+def GMM_logprob_torch(mus, sigma, x):
+    Nbranch = mus.shape[0]
+    Ndim = mus.shape[1]
+    sigma2 = sigma ** 2
+    normfactor = math.sqrt((2 * torch.pi * sigma) ** Ndim)
+    res = x[:, None, :] - mus[None, :, :]  # [x batch, mu, space dim]
+    dist2 = torch.sum(res ** 2, dim=-1)  # [x batch, mu]
+    logprob = torch.logsumexp(- dist2 / sigma2 / 2, dim=1)
+    logprob -= torch.log(torch.tensor(Nbranch)) + math.log(normfactor)
+    return logprob
+
+
+def GMM_scores_torch(mus, sigma, x):
+    sigma2 = sigma**2
+    res = x[:, None, :] - mus[None, :, :]  # [x batch, mu, space dim]
+    dist2 = torch.sum(res ** 2, dim=-1)  # [x batch, mu]
+    participance = F.softmax(- dist2 / sigma2 / 2, dim=1)  # [x batch, mu]
+    scores = - torch.einsum("ij,ijk->ik", participance, res) / sigma2  # [x batch, space dim]
+    return scores
+
 
 def beta(t, beta0=0.02, beta1=0.0001, nT=1000):
     # nT is the numebr of training time steps

@@ -258,29 +258,47 @@ plt.axis("image")
 plt.show()
 
 
-#%%
+#%% Ring example
+figdir = r"/Users/binxuwang/Library/CloudStorage/OneDrive-HarvardUniversity/HaimDiffusionRNNProj/Ring_NN_train"
 ring_X = generate_ring_samples_torch(6)
 # train test split
+Xtrain, Xtest = ring_X, torch.empty(0, 2)  # train_test_split(ring_X, test_size=0.0001, random_state=42)
 # Xtrain, Xtest = train_test_split(ring_X, test_size=0.0001, random_state=42)
-for epochs in [250, 500, 750, 1000, 2000,]:
-    Xtrain, Xtest = ring_X, torch.empty(0, 2)#train_test_split(ring_X, test_size=0.0001, random_state=42)
-    torch.manual_seed(42)
-    score_model_td = ScoreModel_Time(sigma=10, ndim=2, act_fun=nn.Tanh, nhidden=128, time_embed_dim=32)
-    score_model_td = train_score_td(Xtrain, score_model_td=score_model_td,
-                    sigma=10, lr=0.005, nepochs=epochs, batch_size=1024)
-    # x_traj_denoise = reverse_diffusion_time_dep(score_model_td, sampN=1000, sigma=10, nsteps=1000, ndim=2, exact=False)
-    #%%
-    x_traj_denoise = reverse_diffusion_time_dep(score_model_td, sampN=3000, sigma=10, nsteps=1000, ndim=2, exact=False)
-    figh = visualize_diffusion_distr(x_traj_denoise, explabel="Time Dependent NN trained from weighted denoising")
-    figh.show()
-    #%%
-    plt.figure(figsize=(7, 7))
-    plt.scatter(x_traj_denoise[:, 0, -1], x_traj_denoise[:, 1, -1], alpha=0.2, lw=0.1, color="k")
-    plt.scatter(Xtrain[:,0], Xtrain[:,1], s=160, alpha=0.9, label="train", marker="o")
-    plt.scatter(Xtest[:,0], Xtest[:,1], s=160, alpha=0.9, label="test", marker="o")
-    plt.axis("image")
-    plt.title("epoch{}".format(epochs))
-    plt.show()
+sigma_max = 10
+mlp_width = 8
+mlp_depth = 3 # note, 2 layer usually doesn't work. 3 layer works.
+act_fun = nn.Tanh
+cfg_str = f"mlp {mlp_depth} layer width{mlp_width} {act_fun.__name__} sigma{sigma_max}"
+
+for batch_size in [128, 256, 512, 1024]:
+    for epochs in [250, 500, 750, 1000, 1500, 2000,]:
+        torch.manual_seed(42)
+        score_model_td = ScoreModel_Time(sigma=sigma_max, ndim=2, act_fun=nn.Tanh,
+                                         nhidden=mlp_width, nlayers=mlp_depth,
+                                         time_embed_dim=32)
+        score_model_td = train_score_td(Xtrain, score_model_td=score_model_td,
+                        sigma=sigma_max, lr=0.005, nepochs=epochs, batch_size=batch_size)
+        #%%
+        x_traj_denoise = reverse_diffusion_time_dep(score_model_td, sampN=3000, sigma=sigma_max, nsteps=1000, ndim=2, exact=False)
+        figh = visualize_diffusion_distr(x_traj_denoise,
+                             explabel=f"Time Dependent NN trained from weighted denoising\nepoch{epochs} batch {batch_size}\n{cfg_str}")
+        figh.axes[1].set_xlim([-2.5, 2.5])
+        figh.axes[1].set_ylim([-2.5, 2.5])
+        saveallforms(figdir, f"ring_NN_contour_train_mlp{mlp_depth}_{mlp_width}_batch{batch_size}_ep{epochs:04d}_sde")
+        figh.show()
+        #%%
+        plt.figure(figsize=(7, 7))
+        plt.scatter(x_traj_denoise[:, 0, -1], x_traj_denoise[:, 1, -1], alpha=0.1, lw=0.1, color="k", label="score net gen samples")
+        plt.scatter(Xtrain[:, 0], Xtrain[:, 1], s=200, alpha=0.9, label="train", marker="o")
+        plt.scatter(Xtest[:, 0], Xtest[:, 1], s=200, alpha=0.9, label="test", marker="o")
+        plt.axis("image")
+        plt.xlim(-2.5, 2.5)
+        plt.ylim(-2.5, 2.5)
+        plt.title(f"NN Generated Samples\nepoch{epochs} batch {batch_size}\n{cfg_str}")
+        plt.legend()
+        plt.tight_layout()
+        saveallforms(figdir, f"ring_NN_samples_train_mlp{mlp_depth}_{mlp_width}_batch{batch_size}_ep{epochs:04d}_sde")
+        plt.show()
 
 
 #%%
