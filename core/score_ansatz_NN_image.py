@@ -47,10 +47,11 @@ def train_score_td(X_train_tsr, score_model_td=None,
                    lr=0.005,
                    nepochs=750,
                    eps=1E-3,
-                   batch_size=None):
+                   batch_size=None,
+                   clipnorm=None,):
     ndim = X_train_tsr.shape[1]
     if score_model_td is None:
-        score_model_td = ScoreModel_Time(sigma=sigma, ndim=ndim)
+        score_model_td = ScoreModel_Time_edm(sigma=sigma, ndim=ndim)
     marginal_prob_std_f = lambda t: marginal_prob_std(t, sigma)
     optim = Adam(score_model_td.parameters(), lr=lr)
     pbar = trange(nepochs)
@@ -63,12 +64,14 @@ def train_score_td(X_train_tsr, score_model_td=None,
 
         optim.zero_grad()
         loss.backward()
+        if clipnorm is not None:
+            torch.nn.utils.clip_grad_norm_(score_model_td.parameters(),
+                                           max_norm=clipnorm)
         optim.step()
         pbar.set_description(f"step {ep} loss {loss.item():.3f}")
         if ep == 0:
             print(f"step {ep} loss {loss.item():.3f}")
     return score_model_td
-
 
 
 def reverse_diffusion_time_dep(score_model_td, sampN=500, sigma=5, nsteps=200, ndim=2, exact=False):
@@ -142,184 +145,6 @@ def generate_ring_samples_torch(n_points, R=1, ):
     spiral_batch = torch.stack((x, y), dim=1)
     return spiral_batch
 
-
-# def gaussian_mixture_logprob_score_torch(x, mus, Us, Lambdas, weights=None):
-#     """
-#     Evaluate log probability and score of a Gaussian mixture model in PyTorch
-#     :param x: [N batch, N dim]
-#     :param mus: [N comp, N dim]
-#     :param Us: [N comp, N dim, N dim]
-#     :param Lambdas: [N comp, N dim]
-#     :param weights: [N comp,] or None
-#     :return:
-#     """
-#     ndim = x.shape[-1]
-#     logdetSigmas = torch.sum(torch.log(Lambdas), dim=-1)  # [N comp,]
-#     residuals = (x[:, None, :] - mus[None, :, :])  # [N batch, N comp, N dim]
-#     rot_residuals = torch.einsum("BCD,CDE->BCE", residuals, Us)  # [N batch, N comp, N dim]
-#     MHdists = torch.sum(rot_residuals ** 2 / Lambdas[None, :, :], dim=-1)  # [N batch, N comp]
-#     if weights is not None:
-#         logprobs = (-0.5 * (logdetSigmas[None, :] + MHdists) +
-#                     torch.log(weights))  # - 0.5 * ndim * torch.log(2 * torch.pi)  # [N batch, N comp]
-#     else:
-#         logprobs = -0.5 * (logdetSigmas[None, :] + MHdists)
-#     participance = F.softmax(logprobs, dim=-1)  # [N batch, N comp]
-#     compo_score_vecs = torch.einsum("BCD,CED->BCE", - (rot_residuals / Lambdas[None, :, :]),
-#                                     Us)  # [N batch, N comp, N dim]
-#     score_vecs = torch.einsum("BC,BCE->BE", participance, compo_score_vecs)  # [N batch, N dim]
-#     # logsumexp trick
-#     logprob = torch.logsumexp(logprobs, dim=-1)  # [N batch,]
-#     logprob -= 0.5 * ndim * math.log(2 * torch.pi)
-#     return logprob, score_vecs
-#
-
-def gaussian_mixture_score_batch_sigma_torch(x, mus, Us, Lambdas, weights=None):
-    """
-    Evaluate log probability and score of a Gaussian mixture model in PyTorch
-    :param x: [N batch,N dim]
-    :param mus: [N comp, N dim]
-    :param Us: [N comp, N dim, N dim]
-    :param Lambdas: [N batch, N comp, N dim]
-    :param weights: [N comp,] or None
-    :return:
-    """
-    if Lambdas.ndim == 2:
-        Lambdas = Lambdas[None, :, :]
-    ndim = x.shape[-1]
-    logdetSigmas = torch.sum(torch.log(Lambdas), dim=-1)  # [N batch, N comp,]
-    residuals = (x[:, None, :] - mus[None, :, :])  # [N batch, N comp, N dim]
-    rot_residuals = torch.einsum("BCD,CDE->BCE", residuals, Us)  # [N batch, N comp, N dim]
-    MHdists = torch.sum(rot_residuals ** 2 / Lambdas, dim=-1)  # [N batch, N comp]
-    if weights is not None:
-        logprobs = (-0.5 * (logdetSigmas + MHdists) +
-                    torch.log(weights))  # - 0.5 * ndim * torch.log(2 * torch.pi)  # [N batch, N comp]
-    else:
-        logprobs = -0.5 * (logdetSigmas + MHdists)
-    participance = F.softmax(logprobs, dim=-1)  # [N batch, N comp]
-    compo_score_vecs = torch.einsum("BCD,CED->BCE", - (rot_residuals / Lambdas),
-                                    Us)  # [N batch, N comp, N dim]
-    score_vecs = torch.einsum("BC,BCE->BE", participance, compo_score_vecs)  # [N batch, N dim]
-    return score_vecs
-
-
-def gaussian_mixture_lowrank_score_batch_sigma_torch(x,
-                 mus, Us, Lambdas, sigma, weights=None):
-    """
-    Evaluate log probability and score of a Gaussian mixture model in PyTorch
-    :param x: [N batch,N dim]
-    :param mus: [N comp, N dim]
-    :param Us: [N comp, N dim, N rank]
-    :param Lambdas: [N comp, N rank]
-    :param sigma: [N batch,] or []
-    :param weights: [N comp,] or None
-    :return:
-    """
-    if Lambdas.ndim == 2:
-        Lambdas = Lambdas[None, :, :]
-    ndim = x.shape[-1]
-    nrank = Us.shape[-1]
-    logdetSigmas = torch.sum(torch.log(Lambdas + sigma[:, None, None] ** 2), dim=-1)  # [N batch, N comp,]
-    logdetSigmas += (ndim - nrank) * 2 * torch.log(sigma)[:, None]  # [N batch, N comp,]
-    residuals = (x[:, None, :] - mus[None, :, :])  # [N batch, N comp, N dim]
-    residual_sqnorm = torch.sum(residuals ** 2, dim=-1)  # [N batch, N comp]
-    Lambda_tilde = Lambdas / (Lambdas + sigma[:, None, None] ** 2)  # [N batch, N comp, N rank]
-    rot_residuals = torch.einsum("BCD,CDE->BCE", residuals, Us)  # [N batch, N comp, N dim]
-    MHdists_lowrk = torch.sum(rot_residuals ** 2 * Lambda_tilde, dim=-1)  # [N batch, N comp]
-
-    # if weights is not None:
-    #     logprobs = (-0.5 * (logdetSigmas + MHdists) +
-    #                 torch.log(weights))  # - 0.5 * ndim * torch.log(2 * torch.pi)  # [N batch, N comp]
-    # # else:
-    logprobs = -0.5 * (logdetSigmas + (residual_sqnorm - MHdists_lowrk) / sigma[:, None] ** 2)  # [N batch, N comp]
-    if weights is not None:
-        logprobs += torch.log(weights)
-    participance = F.softmax(logprobs, dim=-1)  # [N batch, N comp]
-    compo_score_vecs = - residuals + torch.einsum("BCD,CED->BCE",
-                                    (rot_residuals * Lambda_tilde),
-                                    Us)  # [N batch, N comp, N dim]
-    score_vecs = torch.einsum("BC,BCE->BE", participance, compo_score_vecs) / sigma[:, None] ** 2  # [N batch, N dim]
-    return score_vecs
-
-
-class GMM_ansatz_net(nn.Module):
-    def __init__(self, ndim, n_components, ):
-        super().__init__()
-        self.ndim = ndim
-        self.n_components = n_components
-        # normalize the weights
-        mus = torch.randn(n_components, ndim)
-        Us = torch.randn(n_components, ndim, ndim)
-        mus = mus / torch.norm(mus, dim=-1, keepdim=True)
-        Us = Us / torch.norm(Us, dim=(-2), keepdim=True)
-        # TODO: orthonormalize Us
-        self.mus = nn.Parameter(mus)
-        self.Us = nn.Parameter(Us)
-        # self.mus = nn.Parameter(torch.randn(n_components, ndim))
-        # self.Us = nn.Parameter(torch.randn(n_components, ndim, ndim))
-        self.logLambdas = nn.Parameter(torch.randn(n_components, ndim))
-        self.logweights = nn.Parameter(torch.log(torch.ones(n_components) / n_components))
-
-    def forward(self, x, sigma):
-        """
-        x: (batch, ndim)
-        sigma: (batch, )
-        """
-        return gaussian_mixture_score_batch_sigma_torch(x, self.mus, self.Us,
-               self.logLambdas.exp()[None, :, :] + sigma[:, None, None] ** 2, self.logweights.exp())
-
-
-class GMM_ansatz_net_lowrank(nn.Module):
-    def __init__(self, ndim, n_components, n_rank):
-        super().__init__()
-        self.ndim = ndim
-        self.n_components = n_components
-        # normalize the weights
-        mus = torch.randn(n_components, ndim)
-        Us = torch.randn(n_components, ndim, n_rank)
-        mus = mus / torch.norm(mus, dim=-1, keepdim=True)
-        Us = Us / torch.norm(Us, dim=(-2), keepdim=True)
-        # TODO: orthonormalize Us
-        self.mus = nn.Parameter(mus)
-        self.Us = nn.Parameter(Us)
-        # self.mus = nn.Parameter(torch.randn(n_components, ndim))
-        # self.Us = nn.Parameter(torch.randn(n_components, ndim, ndim))
-        self.logLambdas = nn.Parameter(torch.randn(n_components, n_rank))
-        self.logweights = nn.Parameter(torch.log(torch.ones(n_components) / n_components))
-
-    def forward(self, x, sigma):
-        """
-        x: (batch, ndim)
-        sigma: (batch, )
-        """
-        return gaussian_mixture_lowrank_score_batch_sigma_torch(x, self.mus, self.Us,
-               self.logLambdas.exp(), sigma[:], self.logweights.exp())
-
-#%%
-def test_lowrank_score_correct(n_components = 5, npnts = 40):
-    # test low rank version
-    ndim = 2
-    n_rank = 1
-    xs = torch.randn(npnts, ndim)
-    mus = torch.randn(n_components, ndim)
-    Us = torch.randn(n_components, ndim, n_rank)
-    mus = mus / torch.norm(mus, dim=-1, keepdim=True)
-    Us = Us / torch.norm(Us, dim=(-2), keepdim=True)
-    Us_ortho = Us[:, [-1, -2], :] * torch.tensor([1, -1])[None, :, None]
-    # test ortho
-    assert torch.allclose(torch.einsum("CDr,CDr->Cr", Us, Us_ortho), torch.zeros(n_components, n_rank))
-    Lambdas_lowrank = torch.randn(n_components, n_rank).exp()
-    # sigma = torch.tensor([1.0])
-    sigma = torch.rand(npnts)
-    score_lowrank = gaussian_mixture_lowrank_score_batch_sigma_torch(xs, mus, Us, Lambdas_lowrank, sigma)
-    # built full rank basis
-    Us_full = torch.cat((Us, Us_ortho), dim=-1)
-    # build full rank noise covariance
-    Lambdas_full = torch.cat((Lambdas_lowrank[None, :, :] + sigma[:, None, None] ** 2,
-                              (sigma[:, None, None] ** 2).repeat(1, n_components, ndim - n_rank)), dim=-1)
-    score_fullrank = gaussian_mixture_score_batch_sigma_torch(xs, mus, Us_full, Lambdas_full,)
-    assert torch.allclose(score_lowrank, score_fullrank, atol=1e-4, rtol=1e-4)
-
-test_lowrank_score_correct()
 #%%
 class GaussianFourierProjection(nn.Module):
   """Gaussian random features for encoding time steps.
@@ -330,6 +155,7 @@ class GaussianFourierProjection(nn.Module):
     # Randomly sample weights during initialization. These weights are fixed
     # during optimization and are not trainable.
     self.W = nn.Parameter(torch.randn(embed_dim // 2) * scale, requires_grad=False)
+
   def forward(self, t):
     t_proj = t.view(-1, 1) * self.W[None, :] * 2 * math.pi
     return torch.cat([torch.sin(t_proj), torch.cos(t_proj)], dim=-1)
@@ -360,10 +186,217 @@ class ScoreModel_Time_edm(nn.Module):
     # the neural network output on the same scale,
     pred = pred / std_vec - x / (1 + std_vec ** 2)
     return pred
+
+#%%
+def gaussian_mixture_score_batch_sigma_torch(x, mus, Us, Lambdas, weights=None):
+    """
+    Evaluate log probability and score of a Gaussian mixture model in PyTorch
+    :param x: [N batch,N dim]
+    :param mus: [N comp, N dim]
+    :param Us: [N comp, N dim, N dim]
+    :param Lambdas: [N batch, N comp, N dim]
+    :param weights: [N comp,] or None
+    :return:
+    """
+    if Lambdas.ndim == 2:
+        Lambdas = Lambdas[None, :, :]
+    ndim = x.shape[-1]
+    logdetSigmas = torch.sum(torch.log(Lambdas), dim=-1)  # [N batch, N comp,]
+    residuals = (x[:, None, :] - mus[None, :, :])  # [N batch, N comp, N dim]
+    rot_residuals = torch.einsum("BCD,CDE->BCE", residuals, Us)  # [N batch, N comp, N dim]
+    MHdists = torch.sum(rot_residuals ** 2 / Lambdas, dim=-1)  # [N batch, N comp]
+    logprobs = -0.5 * (logdetSigmas + MHdists)  # [N batch, N comp]
+    if weights is not None:
+        logprobs += torch.log(weights)  # - 0.5 * ndim * torch.log(2 * torch.pi)  # [N batch, N comp]
+    participance = F.softmax(logprobs, dim=-1)  # [N batch, N comp]
+    compo_score_vecs = torch.einsum("BCD,CED->BCE", - (rot_residuals / Lambdas),
+                                    Us)  # [N batch, N comp, N dim]
+    score_vecs = torch.einsum("BC,BCE->BE", participance, compo_score_vecs)  # [N batch, N dim]
+    return score_vecs
+
+
+def gaussian_mixture_lowrank_score_batch_sigma_torch(x,
+                 mus, Us, Lambdas, sigma, weights=None):
+    """
+    Evaluate log probability and score of a Gaussian mixture model in PyTorch
+    :param x: [N batch,N dim]
+    :param mus: [N comp, N dim]
+    :param Us: [N comp, N dim, N rank]
+    :param Lambdas: [N comp, N rank]
+    :param sigma: [N batch,] or []
+    :param weights: [N comp,] or None
+    :return:
+    """
+    if Lambdas.ndim == 2:
+        Lambdas = Lambdas[None, :, :]
+    ndim = x.shape[-1]
+    nrank = Us.shape[-1]
+    logdetSigmas = torch.sum(torch.log(Lambdas + sigma[:, None, None] ** 2), dim=-1)  # [N batch, N comp,]
+    logdetSigmas += (ndim - nrank) * 2 * torch.log(sigma)[:, None]  # [N batch, N comp,]
+    residuals = (x[:, None, :] - mus[None, :, :])  # [N batch, N comp, N dim]
+    residual_sqnorm = torch.sum(residuals ** 2, dim=-1)  # [N batch, N comp]
+    Lambda_tilde = Lambdas / (Lambdas + sigma[:, None, None] ** 2)  # [N batch, N comp, N rank]
+    rot_residuals = torch.einsum("BCD,CDE->BCE", residuals, Us)  # [N batch, N comp, N dim]
+    MHdists_lowrk = torch.sum(rot_residuals ** 2 * Lambda_tilde, dim=-1)  # [N batch, N comp]
+    logprobs = -0.5 * (logdetSigmas +
+                       (residual_sqnorm - MHdists_lowrk) / sigma[:, None] ** 2)  # [N batch, N comp]
+    if weights is not None:
+        logprobs += torch.log(weights)
+    participance = F.softmax(logprobs, dim=-1)  # [N batch, N comp]
+    compo_score_vecs = - residuals + torch.einsum("BCD,CED->BCE",
+                                    (rot_residuals * Lambda_tilde),
+                                    Us)  # [N batch, N comp, N dim]
+    score_vecs = torch.einsum("BC,BCE->BE", participance, compo_score_vecs) / (sigma[:, None] ** 2)  # [N batch, N dim]
+    return score_vecs
+
+
+class GMM_ansatz_net(nn.Module):
+
+    def __init__(self, ndim, n_components, sigma=5.0):
+        super().__init__()
+        self.ndim = ndim
+        self.n_components = n_components
+        # normalize the weights
+        mus = torch.randn(n_components, ndim)
+        Us = torch.randn(n_components, ndim, ndim)
+        mus = mus / torch.norm(mus, dim=-1, keepdim=True)
+        Us = Us / torch.norm(Us, dim=(-2), keepdim=True)
+        # TODO: orthonormalize Us
+        self.mus = nn.Parameter(mus)
+        self.Us = nn.Parameter(Us)
+        self.logLambdas = nn.Parameter(torch.randn(n_components, ndim))
+        self.logweights = nn.Parameter(torch.log(torch.ones(n_components) / n_components))
+        self.marginal_prob_std_f = lambda t: marginal_prob_std(t, sigma)
+
+    def forward(self, x, t):
+        """
+        x: (batch, ndim)
+        sigma: (batch, )
+        """
+        sigma = self.marginal_prob_std_f(t, )
+        return gaussian_mixture_score_batch_sigma_torch(x, self.mus, self.Us,
+               self.logLambdas.exp()[None, :, :] + sigma[:, None, None] ** 2, self.logweights.exp())
+
+
+class GMM_ansatz_net_lowrank(nn.Module):
+    def __init__(self, ndim, n_components, n_rank, sigma=5.0):
+        super().__init__()
+        self.ndim = ndim
+        self.n_components = n_components
+        # normalize the weights
+        mus = torch.randn(n_components, ndim)
+        Us = torch.randn(n_components, ndim, n_rank)
+        mus = mus / torch.norm(mus, dim=-1, keepdim=True)
+        Us = Us / torch.norm(Us, dim=(-2), keepdim=True)
+        # TODO: orthonormalize Us
+        self.mus = nn.Parameter(mus)
+        self.Us = nn.Parameter(Us)
+        self.logLambdas = nn.Parameter(torch.randn(n_components, n_rank))
+        self.logweights = nn.Parameter(torch.log(torch.ones(n_components) / n_components))
+        self.marginal_prob_std_f = lambda t: marginal_prob_std(t, sigma)
+
+    def forward(self, x, t):
+        """
+        x: (batch, ndim)
+        sigma: (batch, )
+        """
+        sigma = self.marginal_prob_std_f(t, )
+        return gaussian_mixture_lowrank_score_batch_sigma_torch(x, self.mus, self.Us,
+               self.logLambdas.exp(), sigma[:], self.logweights.exp())
+
+
+class Gauss_ansatz_net(nn.Module):
+    def __init__(self, ndim, n_rank=None, sigma=5.0):
+        super().__init__()
+        self.ndim = ndim
+        # normalize the weights
+        mus = torch.randn(ndim)
+        if n_rank is None:
+            n_rank = ndim
+        Us = torch.randn(ndim, n_rank)
+        mus = mus / torch.norm(mus, dim=-1, keepdim=True)
+        Us = Us / torch.norm(Us, dim=(-2), keepdim=True)
+        # TODO: orthonormalize Us
+        self.mus = nn.Parameter(mus)
+        self.Us = nn.Parameter(Us)
+        self.logLambdas = nn.Parameter(torch.randn(n_rank))
+        self.marginal_prob_std_f = lambda t: marginal_prob_std(t, sigma)
+
+    def forward(self, x, t):
+        """
+        x: (batch, ndim)
+        sigma: (batch, )
+        """
+        sigma = self.marginal_prob_std_f(t, )
+        # ndim = x.shape[-1]
+        # nrank = Us.shape[-1]
+        residuals = (x[:, :] - self.mus[None, :])  # [N batch, N dim]
+        # residual_sqnorm = torch.sum(residuals ** 2, dim=-1)  # [N batch, ]
+        Lambdas = self.logLambdas.exp()[None, :]
+        Lambda_tilde = Lambdas / (Lambdas + sigma[:, None] ** 2)  # [N batch, N rank]
+        rot_residuals = torch.einsum("BD,DE->BE", residuals, self.Us)  # [N batch, N comp, N dim]
+        # MHdists_lowrk = torch.sum(rot_residuals ** 2 * Lambda_tilde, dim=-1)  # [N batch, N comp]
+        compo_score_vecs = - residuals + torch.einsum("BE,DE->BD",
+                              (rot_residuals * Lambda_tilde), self.Us)  # [N batch, N comp, N dim]
+        score_vecs = compo_score_vecs / (sigma[:, None] ** 2)  # [N batch, N dim]
+        return score_vecs
+
+#%%
+def test_lowrank_score_correct(n_components = 5, npnts = 40):
+    # test low rank version
+    ndim = 2
+    n_rank = 1
+    xs = torch.randn(npnts, ndim)
+    mus = torch.randn(n_components, ndim)
+    Us = torch.randn(n_components, ndim, n_rank)
+    mus = mus / torch.norm(mus, dim=-1, keepdim=True)
+    Us = Us / torch.norm(Us, dim=(-2), keepdim=True)
+    Us_ortho = Us[:, [-1, -2], :] * torch.tensor([1, -1])[None, :, None]
+    # test ortho
+    assert torch.allclose(torch.einsum("CDr,CDr->Cr", Us, Us_ortho), torch.zeros(n_components, n_rank))
+    Lambdas_lowrank = torch.randn(n_components, n_rank).exp()
+    # sigma = torch.tensor([1.0])
+    sigma = torch.rand(npnts)
+    score_lowrank = gaussian_mixture_lowrank_score_batch_sigma_torch(xs, mus, Us, Lambdas_lowrank, sigma)
+    # built full rank basis
+    Us_full = torch.cat((Us, Us_ortho), dim=-1)
+    # build full rank noise covariance
+    Lambdas_full = torch.cat((Lambdas_lowrank[None, :, :] + sigma[:, None, None] ** 2,
+                              (sigma[:, None, None] ** 2).repeat(1, n_components, ndim - n_rank)), dim=-1)
+    score_fullrank = gaussian_mixture_score_batch_sigma_torch(xs, mus, Us_full, Lambdas_full,)
+    assert torch.allclose(score_lowrank, score_fullrank, atol=1e-4, rtol=1e-4)
+
+test_lowrank_score_correct()
+#%%
+def test_lowrank_gauss_score_correct(n_components = 1, npnts = 40, ndim = 3,
+    n_rank = 2):
+    # test low rank version
+    xs = torch.randn(npnts, ndim)
+    mus = torch.randn(n_components, ndim)
+    Us = torch.randn(n_components, ndim, n_rank)
+    ts = torch.rand(npnts)
+    sigmas = marginal_prob_std(ts, 5.0)
+    mus = mus / torch.norm(mus, dim=-1, keepdim=True)
+    Us = Us / torch.norm(Us, dim=(-2), keepdim=True)
+    # test ortho
+    Lambdas_lowrank = torch.randn(n_components, n_rank).exp()
+    score_lowrank = gaussian_mixture_lowrank_score_batch_sigma_torch(xs, mus, Us, Lambdas_lowrank, sigmas)
+
+    net = Gauss_ansatz_net(ndim, n_rank, sigma=5.0)
+    net.mus.data = mus[0]
+    net.Us.data = Us[0]
+    net.logLambdas.data = torch.log(Lambdas_lowrank)[0]
+    # built full rank basis
+    score_gauss = net(xs, ts)
+
+    assert torch.allclose(score_lowrank, score_gauss, atol=1e-4, rtol=1e-4)
+
+test_lowrank_gauss_score_correct()
 #%%
 from torchvision.datasets import MNIST
 from torchvision import transforms
 from torch.utils.data import DataLoader
+from torchvision.utils import make_grid
 
 dataset = MNIST(root="~/Datasets", train=True, download=False, transform=transforms.ToTensor())
 Xtsr = dataset.data.float() / 255
@@ -374,67 +407,171 @@ Xtrain_norm = (Xtrain - Xtrain.mean()) / Xtrain.std()
 Xmean = Xtrain_norm.mean(dim=0)
 covmat = torch.cov((Xtrain_norm - Xmean).T)
 eigval, eigvec = torch.linalg.eigh(covmat.to(torch.float64))
-eigval = eigval.flip(dims=(0,))
-eigvec = eigvec.flip(dims=(1,))
+eigval = eigval.flip(dims=(0,))  # sort from largest to smallest
+eigvec = eigvec.flip(dims=(1,))  # sort from largest to smallest
+assert torch.allclose(eigvec.T @ eigvec, torch.eye(eigvec.shape[0]).to(torch.float64))
+assert torch.allclose(eigvec @ torch.diag(eigval) @ eigvec.T, covmat.to(torch.float64))
 #%%
-from torchvision.utils import make_grid
-mtg = make_grid(eigvec.reshape(1, 28, 28, -1).permute(3,0,1,2)[:50])
-plt.imshow(mtg.permute(1,2,0) / mtg.max())
+mtg = make_grid(eigvec.reshape(1, 28, 28, -1).permute(3,0,1,2)[:100], nrow=10)
+plt.figure(figsize=[10,10])
+plt.imshow(mtg.permute(1, 2, 0) / mtg.max())
+plt.axis("off")
+plt.tight_layout()
 plt.show()
 
 #%%
-logLamnda_init = torch.log(eigval + 1E-6).float()
+logLamda_init = torch.log(eigval + 1E-5).float()
 U_init = eigvec.float()
+
 #%%
 ndim = Xtrain.shape[1]
-gmm_components = 1
-sigma_max = 20
+sigma_max = 10
 epochs = 2000
 batch_size = 2048
 torch.manual_seed(42)
-score_model_td = GMM_ansatz_net(ndim=ndim, n_components=gmm_components)
+score_model_gauss = Gauss_ansatz_net(ndim=ndim, sigma=sigma_max)
 # Data PC initialization
-score_model_td.logLambdas.data = logLamnda_init[None, :].repeat(gmm_components, 1)
-score_model_td.Us.data = U_init[None, :].repeat(gmm_components, 1, 1)
-perturb = torch.randn(gmm_components, ndim)
-perturb = perturb / torch.norm(perturb, dim=-1, keepdim=True)
-score_model_td.mus.data = Xmean[None, :]# + perturb * 1
+score_model_gauss.logLambdas.data = logLamda_init[:]
+score_model_gauss.Us.data = U_init[:, :]
+# perturb = torch.randn(gmm_components, ndim)
+# perturb = perturb / torch.norm(perturb, dim=-1, keepdim=True)
+score_model_gauss.mus.data = Xmean[:]  # + perturb * 1
 #%%
-score_model_td = train_score_td(Xtrain_norm, score_model_td=score_model_td,
-        sigma=sigma_max, lr=0.00025, nepochs=epochs, batch_size=batch_size)
+score_model_gauss = train_score_td(Xtrain_norm, score_model_td=score_model_gauss,
+        sigma=sigma_max, lr=0.001, nepochs=epochs, batch_size=batch_size, clipnorm=1)
 # loss around 400 over 800 epochs, still very bad.
 # parameter is over too much 30 Million for 50 components
 # Training takes 20 mins for 2000 epochs
+
+#%%
+ndim = Xtrain.shape[1]
+gmm_components = 10
+sigma_max = 10
+epochs = 2000
+batch_size = 2048
+torch.manual_seed(42)
+score_model_gmm = GMM_ansatz_net(ndim=ndim,
+             n_components=gmm_components, sigma=sigma_max)
+# Data PC initialization
+score_model_gmm.logLambdas.data = logLamda_init[None, :].repeat(gmm_components, 1)
+score_model_gmm.Us.data = U_init[None, :, :].repeat(gmm_components, 1, 1)
+perturb = torch.randn(gmm_components, ndim)
+perturb = perturb / torch.norm(perturb, dim=-1, keepdim=True)
+score_model_gmm.mus.data = Xmean[None, :].repeat(gmm_components, 1) + perturb * 10
+#%%
+score_model_gmm = train_score_td(Xtrain_norm, score_model_td=score_model_gmm,
+        sigma=sigma_max, lr=0.0005, nepochs=epochs, batch_size=batch_size, clipnorm=1)
+# 10 full Gaussian GMM 0.0005 lr, 2000 epochså
+# step 0 loss 283.743
+# step 1999 loss 108.833: 100%|██████████| 2000/2000 [07:53<00:00,  4.23it/s]
+#%%
+print("number of parameters",
+sum(p.numel() for p in score_model_gmm.parameters() if p.requires_grad))
+# 6 million parameters
+#%%
+samples = reverse_diffusion_time_dep(score_model_gmm, sampN=100, sigma=sigma_max, nsteps=1000, ndim=ndim, exact=False)
+#%%
+mtg = make_grid(torch.from_numpy(samples[:,:,-1].reshape(-1, 1, 28, 28)), nrow=10)
+plt.figure(figsize=[10,10])
+plt.imshow(mtg.permute(1, 2, 0))
+plt.axis("off")
+plt.tight_layout()
+plt.show()
+#%%
+centroids = score_model_gmm.mus.detach().reshape(-1, 1, 28, 28)
+mtg = make_grid(centroids, nrow=5)
+plt.imshow(mtg.permute(1, 2, 0) )
+plt.show()
+
+#%%
+ndim = Xtrain.shape[1]
+gmm_components = 50
+sigma_max = 10
+epochs = 2000
+batch_size = 2048
+torch.manual_seed(42)
+score_model_gmm = GMM_ansatz_net(ndim=ndim,
+             n_components=gmm_components, sigma=sigma_max)
+# Data PC initialization
+score_model_gmm.logLambdas.data = logLamda_init[None, :].repeat(gmm_components, 1)
+score_model_gmm.Us.data = U_init[None, :, :].repeat(gmm_components, 1, 1)
+perturb = torch.randn(gmm_components, ndim)
+perturb = perturb / torch.norm(perturb, dim=-1, keepdim=True)
+score_model_gmm.mus.data = Xmean[None, :].repeat(gmm_components, 1) + perturb * 10
+#%%
+score_model_gmm = train_score_td(Xtrain_norm, score_model_td=score_model_gmm,
+        sigma=sigma_max, lr=0.0005, nepochs=epochs, batch_size=batch_size, clipnorm=1)
+# 50 full Gaussian GMM 0.0005 lr, 2000 epochså
+# step 0 loss 283.743
+# step 1999 loss 108.833: 100%|██████████| 2000/2000 [07:53<00:00,  4.23it/s]
+#%%
+print("number of parameters",
+sum(p.numel() for p in score_model_gmm.parameters() if p.requires_grad))
+# 6 million parameters
+#%%
+samples = reverse_diffusion_time_dep(score_model_gmm, sampN=100, sigma=sigma_max, nsteps=1000, ndim=ndim, exact=False)
+#%%
+mtg = make_grid(torch.from_numpy(samples[:,:,-1].reshape(-1, 1, 28, 28)), nrow=10)
+plt.figure(figsize=[10,10])
+plt.imshow(mtg.permute(1, 2, 0))
+plt.axis("off")
+plt.tight_layout()
+plt.show()
+#%%
+centroids = score_model_gmm.mus.detach().reshape(-1, 1, 28, 28)
+mtg = make_grid(centroids, nrow=5)
+plt.imshow(mtg.permute(1, 2, 0) )
+plt.show()
+
 
 
 
 #%%
 ndim = Xtrain.shape[1]
-nrank = 400
-gmm_components = 20
+nrank = 350
+gmm_components = 10
 sigma_max = 10
 epochs = 2000
-batch_size = 1024
+batch_size = 2048
 torch.manual_seed(42)
 score_model_lowrk = GMM_ansatz_net_lowrank(ndim=ndim,
-           n_components=gmm_components, n_rank=nrank)
+           n_components=gmm_components, n_rank=nrank, sigma=sigma_max)
 # Data PC initialization
-score_model_lowrk.logLambdas.data = logLamnda_init[None, :nrank].repeat(gmm_components, 1)
+score_model_lowrk.logLambdas.data = logLamda_init[None, :nrank].repeat(gmm_components, 1)
 score_model_lowrk.Us.data = U_init[None, :, :nrank].repeat(gmm_components, 1, 1)
 perturb = torch.randn(gmm_components, ndim)
 perturb = perturb / torch.norm(perturb, dim=-1, keepdim=True)
-score_model_lowrk.mus.data = Xmean[None, :] + perturb * 1
+score_model_lowrk.mus.data = Xmean[None, :] + perturb * 25
 #%%
 score_model_lowrk = train_score_td(Xtrain_norm, score_model_td=score_model_lowrk,
-        sigma=sigma_max, lr=0.00001, nepochs=epochs, batch_size=batch_size)
-# loss around 400 over 800 epochs, still very bad.
-# parameter is over too much 30 Million for 50 components
-# Training takes 20 mins for 2000 epochs
-
-
+        sigma=sigma_max, lr=0.0002, nepochs=epochs, batch_size=batch_size, clipnorm=1)
+# step 0 loss 375.200
+# step 1999 loss 118.352: 100%|██████████| 2000/2000 [10:10<00:00,  3.27it/s]
+# 10 mins, loss around 120,
+# 5510700 parameters 5M
 #%%
+print("number of parameters",
+sum(p.numel() for p in score_model_lowrk.parameters() if p.requires_grad))
+#%%
+samples = reverse_diffusion_time_dep(score_model_lowrk, sampN=100, sigma=sigma_max, nsteps=1000, ndim=ndim, exact=False)
+#%%
+mtg = make_grid(torch.from_numpy(samples[:,:,-1].reshape(-1, 1, 28, 28)), nrow=10)
+plt.figure(figsize=[10,10])
+plt.imshow(mtg.permute(1, 2, 0))
+plt.axis("off")
+plt.tight_layout()
+plt.show()
+#%%
+centroids = score_model_lowrk.mus.detach().reshape(-1, 1, 28, 28)
+mtg = make_grid(centroids, nrow=5)
+plt.imshow(mtg.permute(1, 2, 0) )
+plt.show()
+
+
+
+#%% Baseline, MLP score model with time embedding
 epochs = 2000
-batch_size = 1024
+batch_size = 2048
 score_model_edm = ScoreModel_Time_edm(sigma=sigma_max, ndim=ndim,
                 nlayers=8, nhidden=512, time_embed_dim=64,
                 act_fun=nn.Tanh)
@@ -444,16 +581,19 @@ score_model_edm = train_score_td(Xtrain_norm, score_model_td=score_model_edm,
 # 1 mins for 2000 epochs
 #%%
 # count the total number of parameters
-sum(p.numel() for p in score_model_td.parameters() if p.requires_grad)
+sum(p.numel() for p in score_model_gmm.parameters() if p.requires_grad)
 #%%
 # count the total number of parameters
 sum(p.numel() for p in score_model_edm.parameters() if p.requires_grad)
-
+#%%
+score_model_gauss(Xtrain_norm[:1], torch.tensor([.2])).norm()
+#%%
+score_model_edm(Xtrain_norm[:1], torch.tensor([.2])).norm()
 
 
 #%%
 from torchvision.utils import make_grid
-centroids = score_model_td.mus.detach().reshape(-1, 1, 28, 28)
+centroids = score_model_lowrk.mus.detach().reshape(-1, 1, 28, 28)
 mtg = make_grid(centroids)
 plt.imshow(mtg.permute(1, 2, 0) / mtg.max())
 plt.show()

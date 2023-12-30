@@ -139,7 +139,6 @@ def generate_ring_samples_torch(n_points, R=1, ):
     spiral_batch = torch.stack((x, y), dim=1)
     return spiral_batch
 #%%
-#%%
 import math
 import torch
 import torch.nn.functional as F
@@ -203,7 +202,7 @@ def gaussian_mixture_score_batch_sigma_torch(x, mus, Us, Lambdas, weights=None):
 #%%
 import torch.nn as nn
 class GMM_ansatz_net(nn.Module):
-    def __init__(self, ndim, n_components, ):
+    def __init__(self, ndim, n_components, sigma=5.0):
         super().__init__()
         self.ndim = ndim
         self.n_components = n_components
@@ -211,38 +210,43 @@ class GMM_ansatz_net(nn.Module):
         self.Us = nn.Parameter(torch.randn(n_components, ndim, ndim))
         self.logLambdas = nn.Parameter(torch.randn(n_components, ndim))
         self.logweights = nn.Parameter(torch.log(torch.ones(n_components) / n_components))
+        self.marginal_prob_std_f = lambda t: marginal_prob_std(t, sigma)
 
-    def forward(self, x, sigma):
+    def forward(self, x, t):
         """
         x: (batch, ndim)
         sigma: (batch, )
         """
+        sigma = self.marginal_prob_std_f(t)
         return gaussian_mixture_score_batch_sigma_torch(x, self.mus, self.Us,
                self.logLambdas.exp()[None, :, :] + sigma[:, None, None]**2, self.logweights.exp())
 
 
 #%%
+import os
 from sklearn.model_selection import train_test_split
 figdir = r"/Users/binxuwang/Library/CloudStorage/OneDrive-HarvardUniversity/HaimDiffusionRNNProj/Ring_GMM_ansatz_train"
-import os
 os.makedirs(figdir, exist_ok=True)
-# ring_X = generate_ring_samples_torch(50)
-ring_X = generate_spiral_samples_torch(20, a=0.4, b=0.15)
+train_pnts = 20
+# ring_X = generate_ring_samples_torch(train_pnts)
+ring_X = generate_spiral_samples_torch(train_pnts, a=0.4, b=0.15)
 # train test split
 Xtrain, Xtest = ring_X, torch.empty(0, 2)  # train_test_split(ring_X, test_size=0.0001, random_state=42)
 # Xtrain, Xtest = train_test_split(ring_X, test_size=0.0001, random_state=42)
 sigma_max = 10
-gmm_components = 150
+gmm_components = 50
 # mlp_width = 8
 # mlp_depth = 3 # note, 2 layer usually doesn't work. 3 layer works.
 # act_fun = nn.Tanh
 # cfg_str = f"mlp {mlp_depth} layer width{mlp_width} {act_fun.__name__} sigma{sigma_max}"
-cfg_str = f"sigma{sigma_max} dense"
-cfg_str = f"sigma{sigma_max} dense spiral, {gmm_components} components"
+cfg_str = f"sigma{sigma_max} dense ring {gmm_components} components"
+# cfg_str = f"sigma{sigma_max} dense spiral, {gmm_components} components"
+# dataset_str = f"ring_{train_pnts}"
+dataset_str = f"spiral_{train_pnts}"
 for batch_size in [1024]: # 128, 256, 512,
-    for epochs in [250, 500, 750, 1000, 1500, 2000,]:# :
+    for epochs in [250, 500, 750, 1000, 1500, 2000, 3000]:# :
         torch.manual_seed(42)
-        score_model_td = GMM_ansatz_net(ndim=2, n_components=gmm_components)
+        score_model_td = GMM_ansatz_net(ndim=2, n_components=gmm_components, sigma=sigma_max)
         score_model_td = train_score_td(Xtrain, score_model_td=score_model_td,
                         sigma=sigma_max, lr=0.05, nepochs=epochs, batch_size=batch_size)
         #%%
@@ -251,7 +255,7 @@ for batch_size in [1024]: # 128, 256, 512,
                              explabel=f"Time Dependent NN trained from weighted denoising\nepoch{epochs} batch {batch_size}\n{cfg_str}")
         figh.axes[1].set_xlim([-2.5, 2.5])
         figh.axes[1].set_ylim([-2.5, 2.5])
-        saveallforms(figdir, f"ring_NN_contour_train_Ncomp{gmm_components}_batch{batch_size}_ep{epochs:04d}_sde")
+        saveallforms(figdir, f"{dataset_str}_NN_contour_train_Ncomp{gmm_components}_batch{batch_size}_ep{epochs:04d}_sde")
         figh.show()
         #%%
         plt.figure(figsize=(7, 7))
@@ -264,7 +268,7 @@ for batch_size in [1024]: # 128, 256, 512,
         plt.title(f"NN Generated Samples\nepoch{epochs} batch {batch_size}\n{cfg_str}")
         plt.legend()
         plt.tight_layout()
-        saveallforms(figdir, f"ring_NN_samples_train_Ncomp{gmm_components}_batch{batch_size}_ep{epochs:04d}_sde")
+        saveallforms(figdir, f"{dataset_str}_NN_samples_train_Ncomp{gmm_components}_batch{batch_size}_ep{epochs:04d}_sde")
         plt.show()
 #%%
 # len(list(score_model_td.parameters()))
