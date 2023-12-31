@@ -70,12 +70,15 @@ def train_score_td(X_train_tsr, score_model_td=None,
                    nepochs=750,
                    eps=1E-3,
                    batch_size=None,
-                   clipnorm=None,):
+                   clipnorm=None,
+                   scheduler_fun=None,):
     ndim = X_train_tsr.shape[1]
     if score_model_td is None:
         score_model_td = ScoreModel_Time_edm(sigma=sigma, ndim=ndim)
     marginal_prob_std_f = lambda t: marginal_prob_std(t, sigma)
     optim = Adam(score_model_td.parameters(), lr=lr)
+    if scheduler_fun is not None:
+        scheduler = scheduler_fun(optim, )
     pbar = trange(nepochs)
     for ep in pbar:
         if batch_size is None:
@@ -90,7 +93,11 @@ def train_score_td(X_train_tsr, score_model_td=None,
             torch.nn.utils.clip_grad_norm_(score_model_td.parameters(),
                                            max_norm=clipnorm)
         optim.step()
-        pbar.set_description(f"step {ep} loss {loss.item():.3f}")
+        if scheduler_fun is not None:
+            scheduler.step()
+            pbar.set_description(f"step {ep} loss {loss.item():.3f} lr {scheduler.get_last_lr()[0]:.1e}")
+        else:
+            pbar.set_description(f"step {ep} loss {loss.item():.3f}")
         if ep == 0:
             print(f"step {ep} loss {loss.item():.3f}")
     return score_model_td
@@ -339,40 +346,42 @@ mmha = train_score_td(Xtrain_norm, score_model_td=mmha,
 # step 4999 loss 203.844: 100%|██████████| 5000/5000 [02:56<00:00, 28.28it/s]
 
 #%%
+from torch.optim.lr_scheduler import CosineAnnealingLR
 resblock_cfg = {
     "ndim": Xtrain_norm.shape[1],
-    "n_centroids": 32,
+    "n_centroids": 64,
     "n_dot": 64,
     "n_hidden": 64,
-    "n_heads": 8,
+    "n_heads": 4,
     "time_embed_dim": 128,
-    "mlp_proj_dim": 512,
+    "mlp_proj_dim": 1024,
 }
 deep_mmha = ModulatedSequential(
     ModulatedResBlock(**resblock_cfg),
     ModulatedResBlock(**resblock_cfg),
-    ModulatedResBlock(**resblock_cfg),
-    ModulatedResBlock(**resblock_cfg),
+    # ModulatedResBlock(**resblock_cfg),
+    # ModulatedResBlock(**resblock_cfg),
 )
 device = "cuda"
 deep_mmha.to(device)
 Xtrain_norm = Xtrain_norm.to(device)
 train_cfg = {
     "sigma": 10,
-    "lr": 0.0001,
-    "nepochs": 50000,
-    "batch_size": 4096,
+    "lr": 0.001,
+    "nepochs": 100000,
+    "batch_size": 16384,
 }
+scheduler_fun = lambda optim: CosineAnnealingLR(optim, T_max=train_cfg["nepochs"], eta_min=1e-5)
 print("Parameter count: ", count_parameters(deep_mmha))
 deep_mmha = train_score_td(Xtrain_norm, score_model_td=deep_mmha,
-        **train_cfg,)
+        **train_cfg,scheduler_fun=scheduler_fun)
 # Parameter count:  7371561
 # step 0 loss 4426.592
 # step 19999 loss 108.260: 100%|██████████| 20000/20000 [27:11<00:00, 12.26it/s]
 #%%
 train_cfg = {
     "sigma": 10,
-    "lr": 0.0001,
+    "lr": 0.0005,
     "nepochs": 50000,
     "batch_size": 2048,
 }
