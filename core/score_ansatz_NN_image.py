@@ -502,12 +502,12 @@ score_model_gmm.mus.data = Xmean[None, :].repeat(gmm_components, 1) + perturb * 
 score_model_gmm = train_score_td(Xtrain_norm, score_model_td=score_model_gmm,
         sigma=sigma_max, lr=0.0005, nepochs=epochs, batch_size=batch_size, clipnorm=1)
 # 50 full Gaussian GMM 0.0005 lr, 2000 epochså
-# step 0 loss 283.743
-# step 1999 loss 108.833: 100%|██████████| 2000/2000 [07:53<00:00,  4.23it/s]
+# step 0 loss 268.291
+# step 1999 loss 114.897: 100%|██████████| 2000/2000 [37:20<00:00,  1.12s/it]
 #%%
 print("number of parameters",
 sum(p.numel() for p in score_model_gmm.parameters() if p.requires_grad))
-# 6 million parameters
+# 30 million parameters
 #%%
 samples = reverse_diffusion_time_dep(score_model_gmm, sampN=100, sigma=sigma_max, nsteps=1000, ndim=ndim, exact=False)
 #%%
@@ -519,7 +519,7 @@ plt.tight_layout()
 plt.show()
 #%%
 centroids = score_model_gmm.mus.detach().reshape(-1, 1, 28, 28)
-mtg = make_grid(centroids, nrow=5)
+mtg = make_grid(centroids, nrow=8)
 plt.imshow(mtg.permute(1, 2, 0) )
 plt.show()
 
