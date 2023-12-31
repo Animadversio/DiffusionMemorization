@@ -1,3 +1,4 @@
+#%%
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -17,7 +18,7 @@ Xtrain_norm = (Xtrain - Xtrain.mean()) / Xtrain.std()
 
 #%%
 # multi-head attention
-ndim = 728
+ndim = 784
 n_centroids = 10
 n_hidden = 64
 n_dot = 64
@@ -95,7 +96,7 @@ def train_score_td(X_train_tsr, score_model_td=None,
     return score_model_td
 
 
-def reverse_diffusion_time_dep(score_model_td, sampN=500, sigma=5, nsteps=200, ndim=2, exact=False):
+def reverse_diffusion_time_dep(score_model_td, sampN=500, sigma=5, nsteps=200, ndim=2, exact=False, device="cpu"):
   """
   score_model_td: if `exact` is True, use a gmm of class GaussianMixture
                   if `exact` is False. use a torch neural network that takes vectorized x and t as input.
@@ -114,7 +115,7 @@ def reverse_diffusion_time_dep(score_model_td, sampN=500, sigma=5, nsteps=200, n
       score_xt = gmm_t.score(x_traj_rev[:,:,i-1])
     else:
       with torch.no_grad():
-        score_xt = score_model_td(torch.tensor(x_traj_rev[:,:,i-1]).float(), tvec).numpy()
+        score_xt = score_model_td(torch.tensor(x_traj_rev[:,:,i-1]).float().to(device), tvec.to(device)).cpu().numpy()
     # simple Euler-Maryama integration of SGD
     x_traj_rev[:,:,i] = x_traj_rev[:,:,i-1] + eps_z * (sigma ** t) * np.sqrt(dt) + score_xt * dt * sigma**(2*t)
   return x_traj_rev
@@ -298,7 +299,7 @@ class ModulatedSequential(nn.Sequential):
 #%%
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
+#%%
 ndim = Xtrain_norm.shape[1]
 n_centroids = 32
 n_hidden = 64
@@ -351,12 +352,16 @@ deep_mmha = ModulatedSequential(
     ModulatedResBlock(**resblock_cfg),
     ModulatedResBlock(**resblock_cfg),
     ModulatedResBlock(**resblock_cfg),
+    ModulatedResBlock(**resblock_cfg),
 )
+device = "cuda"
+deep_mmha.to(device)
+Xtrain_norm = Xtrain_norm.to(device)
 train_cfg = {
     "sigma": 10,
-    "lr": 0.001,
-    "nepochs": 20000,
-    "batch_size": 1024,
+    "lr": 0.0001,
+    "nepochs": 50000,
+    "batch_size": 4096,
 }
 print("Parameter count: ", count_parameters(deep_mmha))
 deep_mmha = train_score_td(Xtrain_norm, score_model_td=deep_mmha,
