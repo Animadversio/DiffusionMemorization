@@ -320,34 +320,38 @@ for time_embed_dim in time_embed_dim_list:
             def training_callback(score_model_td, epochs, loss):
                 x_traj_denoise = reverse_diffusion_time_dep_torch(score_model_td, 
                         sampN=3000, sigma=sigma_max, nsteps=1000, ndim=2, exact=False, device="cuda")
-                figh = visualize_diffusion_distr(x_traj_denoise,
-                                    explabel=f"Time Dependent NN trained from weighted denoising\nepoch{epochs} batch {batch_size}\n{model_cfg_str}")
-                figh.axes[1].set_xlim([-2.5, 2.5])
-                figh.axes[1].set_ylim([-2.5, 2.5])
-                saveallforms(figdir, f"{dataset_str}_NN_contour_train_{cfg_fn_str}_batch{batch_size}_ep{epochs:04d}_sde")
-                figh.show()
-                
-                plt.figure(figsize=(7, 7))
-                plt.scatter(x_traj_denoise[:, 0, -1], x_traj_denoise[:, 1, -1], alpha=0.1, lw=0.1, color="k", label="score net gen samples")
-                plt.scatter(Xtrain[:, 0], Xtrain[:, 1], s=200, alpha=0.9, label="train", marker="o")
-                plt.scatter(Xtest[:, 0], Xtest[:, 1], s=200, alpha=0.9, label="test", marker="o")
-                plt.axis("image")
-                plt.xlim(-2.8, 2.8)
-                plt.ylim(-2.8, 2.8)
-                plt.title(f"NN Generated Samples\nepoch{epochs} batch {batch_size}\n{model_cfg_str}")
-                plt.legend()
-                plt.tight_layout()
-                saveallforms(figdir, f"{dataset_str}_NN_samples_train_{cfg_fn_str}_batch{batch_size}_ep{epochs:04d}_sde")
-                plt.show()
+                try:
+                    figh = visualize_diffusion_distr(x_traj_denoise,
+                                        explabel=f"Time Dependent NN trained from weighted denoising\nepoch{epochs} batch {batch_size}\n{model_cfg_str}")
+                    figh.axes[1].set_xlim([-2.8, 2.8])
+                    figh.axes[1].set_ylim([-2.8, 2.8])
+                    saveallforms(figdir, f"{dataset_str}_NN_contour_train_{cfg_fn_str}_batch{batch_size}_ep{epochs:04d}_sde")
+                    figh.show()
+                    
+                    plt.figure(figsize=(7, 7))
+                    plt.scatter(x_traj_denoise[:, 0, -1], x_traj_denoise[:, 1, -1], alpha=0.1, lw=0.1, color="k", label="score net gen samples")
+                    plt.scatter(Xtrain[:, 0], Xtrain[:, 1], s=200, alpha=0.9, label="train", marker="o")
+                    plt.scatter(Xtest[:, 0], Xtest[:, 1], s=200, alpha=0.9, label="test", marker="o")
+                    plt.axis("image")
+                    plt.xlim(-2.8, 2.8)
+                    plt.ylim(-2.8, 2.8)
+                    plt.title(f"NN Generated Samples\nepoch{epochs} batch {batch_size}\n{model_cfg_str}")
+                    plt.legend()
+                    plt.tight_layout()
+                    saveallforms(figdir, f"{dataset_str}_NN_samples_train_{cfg_fn_str}_batch{batch_size}_ep{epochs:04d}_sde")
+                    plt.show()
+                except Exception as e:
+                    print(e)
+                    print("Error in plotting")
             
             score_model_td, loss_traj = train_score_td(Xtrain, score_model_td=score_model_td,
-                            sigma=sigma_max, lr=0.05, nepochs=max_epoch, batch_size=batch_size, device="cuda",
+                            sigma=sigma_max, lr=lr, nepochs=max_epoch, batch_size=batch_size, device="cuda",
                             callback_func=training_callback, callback_epochs=epochs_list)
             stats = {"loss_init": loss_traj[0], "loss_end" : loss_traj[-1], 
                     "loss_end_10": np.mean(loss_traj[-10:]), "loss_end_100": np.mean(loss_traj[-100:]),
                     "mlp_detail": model_cfg_str, 
                     "depth": mlp_depth, "width": mlp_width, "time_embed_dim": time_embed_dim,
-                    "batch_size": batch_size, "epochs": max_epoch,
+                    "batch_size": batch_size, "epochs": max_epoch, "lr": lr, 
                     "dataset": dataset_str, "sigma": sigma_max, }
             stats_col.append(stats)
             pkl.dump((stats, loss_traj), 
