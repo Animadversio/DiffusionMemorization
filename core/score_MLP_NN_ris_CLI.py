@@ -265,7 +265,8 @@ def parse_arguments():
     parser.add_argument("--batch_size", type=int, default=2048, help="Batch size for training")
     parser.add_argument("--lr", type=float, default=0.005, help="Learning rate")
     parser.add_argument("--sigma_max", type=float, default=10, help="Maximum sigma value")
-
+    # add boolean flags
+    parser.add_argument("--lr_scaling", action='store_true', help="Whether to scale lr with width")
     return parser.parse_args()
 
 rootdir = r"/n/holylabs/LABS/kempner_fellows/Users/binxuwang/DL_Projects/HaimDiffusionRNNProj"
@@ -280,7 +281,10 @@ elif args.shape == "spiral":
     ring_X = generate_spiral_samples_torch(train_pnts, a=0.4, b=0.15)
     dataset_str = f"spiral_{train_pnts}"
 
-figdir = join(rootdir, "Shape2d_MLP_train_kempner", dataset_str)
+if args.lr_scaling:
+  figdir = join(rootdir, "Shape2d_MLP_train_kempner", dataset_str + "_lr_scaling")
+else:
+  figdir = join(rootdir, "Shape2d_MLP_train_kempner", dataset_str)
 os.makedirs(figdir, exist_ok=True)
 Xtrain, Xtest = ring_X, torch.empty(0, 2)
 sigma_max = args.sigma_max
@@ -288,7 +292,7 @@ time_embed_dim_list = args.time_embed_dim
 mlp_depth_list = args.mlp_depth
 mlp_width_list = args.mlp_width
 epochs_list = args.epochs
-lr = args.lr
+lr_orig = args.lr
 # train_pnts = 20
 # batch_size = 2048
 # ring_X = generate_ring_samples_torch(train_pnts)
@@ -302,11 +306,15 @@ lr = args.lr
 # dataset_str = f"ring_{train_pnts}"
 # dataset_str = f"spiral_{train_pnts}"
 plt.switch_backend("Agg")
-max_epoch = 5000
+max_epoch = 5001
 stats_col = []
 for time_embed_dim in time_embed_dim_list:
     for mlp_depth in mlp_depth_list:
         for mlp_width in mlp_width_list:
+            if args.lr_scaling:
+              lr = lr_orig * 256 / (mlp_width + time_embed_dim)
+            else:
+              lr = lr_orig
             model_cfg_str = f"sigma{sigma_max} | mlp depth {mlp_depth} layer | width {mlp_width} units | time embed dim {time_embed_dim}"
             cfg_fn_str = f"temb{time_embed_dim}_depth{mlp_depth}_width{mlp_width}"
             torch.manual_seed(42)
