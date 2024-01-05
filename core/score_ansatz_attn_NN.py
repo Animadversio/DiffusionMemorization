@@ -4,12 +4,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
-#%%
 from torchvision.datasets import MNIST
 from torchvision import transforms
 from torch.utils.data import DataLoader
 from torchvision.utils import make_grid
-
+#%%
 dataset = MNIST(root="~/Datasets", train=True, download=False, transform=transforms.ToTensor())
 Xtsr = dataset.data.float() / 255
 Xtrain = Xtsr.reshape(Xtsr.shape[0], -1)
@@ -71,7 +70,10 @@ def train_score_td(X_train_tsr, score_model_td=None,
                    eps=1E-3,
                    batch_size=None,
                    clipnorm=None,
-                   scheduler_fun=None,):
+                   scheduler_fun=None,
+                   device="cpu",
+                   callback_func=lambda score_model_td, epochs, loss: None,
+                   callback_epochs=[]):
     ndim = X_train_tsr.shape[1]
     if score_model_td is None:
         score_model_td = ScoreModel_Time_edm(sigma=sigma, ndim=ndim)
@@ -79,7 +81,11 @@ def train_score_td(X_train_tsr, score_model_td=None,
     optim = Adam(score_model_td.parameters(), lr=lr)
     if scheduler_fun is not None:
         scheduler = scheduler_fun(optim, )
+    score_model_td.to(device)
+    X_train_tsr = X_train_tsr.to(device)
+    score_model_td.train()
     pbar = trange(nepochs)
+    loss_traj = []
     for ep in pbar:
         if batch_size is None:
             loss = denoise_loss_fn(score_model_td, X_train_tsr, marginal_prob_std_f, eps=eps)
@@ -100,7 +106,10 @@ def train_score_td(X_train_tsr, score_model_td=None,
             pbar.set_description(f"step {ep} loss {loss.item():.3f}")
         if ep == 0:
             print(f"step {ep} loss {loss.item():.3f}")
-    return score_model_td
+        if ep in callback_epochs:
+            callback_func(score_model_td, ep, loss)
+        loss_traj.append(loss.item())
+    return score_model_td, loss_traj
 
 
 def reverse_diffusion_time_dep(score_model_td, sampN=500, sigma=5, nsteps=200, ndim=2, exact=False, device="cpu"):
@@ -125,6 +134,33 @@ def reverse_diffusion_time_dep(score_model_td, sampN=500, sigma=5, nsteps=200, n
         score_xt = score_model_td(torch.tensor(x_traj_rev[:,:,i-1]).float().to(device), tvec.to(device)).cpu().numpy()
     # simple Euler-Maryama integration of SGD
     x_traj_rev[:,:,i] = x_traj_rev[:,:,i-1] + eps_z * (sigma ** t) * np.sqrt(dt) + score_xt * dt * sigma**(2*t)
+  return x_traj_rev
+
+
+def reverse_diffusion_time_dep_torch(score_model_td, sampN=500, sigma=5, nsteps=200, ndim=2, exact=False, device="cpu"):
+  """More efficient version that run solely on device
+  score_model_td: if `exact` is True, use a gmm of class GaussianMixture
+                  if `exact` is False. use a torch neural network that takes vectorized x and t as input.
+  """
+  lambdaT = (sigma**2 - 1) / (2 * math.log(sigma))
+  xT = math.sqrt(lambdaT) * torch.randn(sampN, ndim, device=device)
+  x_traj_rev = torch.zeros((sampN, ndim, nsteps), device="cpu")
+  x_traj_rev[:, :, 0] = xT.cpu()
+  dt = 1 / nsteps
+  x_next = xT
+  for i in range(1, nsteps):
+      t = 1 - i * dt
+      tvec = torch.ones((sampN,), device=device) * t
+      eps_z = torch.randn_like(xT)
+      with torch.no_grad():
+        score_xt = score_model_td(x_next, tvec)
+      # if exact:
+      #     gmm_t = diffuse_gmm(score_model_td, t, sigma, device)
+      #     score_xt = gmm_t.score(x_traj_rev[:, :, i-1])
+      # else:
+      x_next = x_next + eps_z * (sigma ** t) * math.sqrt(dt) + score_xt * dt * sigma**(2*t)
+      x_traj_rev[:, :, i] = x_next.cpu()
+
   return x_traj_rev
 
 #%%
