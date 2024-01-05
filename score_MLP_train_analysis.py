@@ -4,9 +4,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from os.path import join
 import glob
+import platform
 #%%
-rootdir = r"/Users/binxuwang/DL_Projects/HaimDiffusionRNNProj/Shape2d_MLP_train_kempner"
-rootdir = r"/n/holylabs/LABS/kempner_fellows/Users/binxuwang/DL_Projects/HaimDiffusionRNNProj/Shape2d_MLP_train_kempner"
+if platform.system() == "Darwin":
+    rootdir = r"/Users/binxuwang/DL_Projects/HaimDiffusionRNNProj/Shape2d_MLP_train_kempner"
+elif platform.system() == "Linux":
+    rootdir = r"/n/holylabs/LABS/kempner_fellows/Users/binxuwang/DL_Projects/HaimDiffusionRNNProj/Shape2d_MLP_train_kempner"
+#%%
 dataset_str = "spiral_50" # "ring_20"
 expdir = join(rootdir, f"{dataset_str}_lr_scaling")
 # list pkl files
