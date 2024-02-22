@@ -160,3 +160,17 @@ def explained_var(vec1, vec2):
 
 def explained_var_vec(vec1, vec2):
     return 1 - (vec1 - vec2).pow(2).sum(dim=-1) / vec1.pow(2).sum(dim=-1)
+
+
+def sample_Xt_batch(Xmat, batch_size, sigma=0.01):
+    idx = torch.randint(Xmat.shape[0], (batch_size,))
+    Xt = Xmat[idx, :]
+    Xt = Xt + sigma * torch.randn_like(Xt)
+    return Xt
+
+
+def sample_Xtyt_batch(Xmat, ytsr, batch_size, sigma=0.01):
+    idx = torch.randint(Xmat.shape[0], (batch_size,))
+    Xt = Xmat[idx, :]
+    Xt = Xt + sigma * torch.randn_like(Xt)
+    return Xt, ytsr[idx]

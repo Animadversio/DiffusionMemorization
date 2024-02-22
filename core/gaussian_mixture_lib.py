@@ -297,7 +297,7 @@ def compute_cluster(Xtrain_norm, n_clusters,
             random_state=kmeans_random_seed, batch_size=kmeans_batch, verbose=kmeans_verbose)
     kmeans.fit(Xtrain_norm)
     print("Kmeans fitting completing, loss ", kmeans.inertia_)
-    covmats = []
+    # covmats = []
     eigval_col = []
     eigvec_col = []
     freq_col = []
@@ -321,9 +321,9 @@ def compute_cluster(Xtrain_norm, n_clusters,
             
         eigval = eigval.flip(dims=(0,))  # sort from largest to smallest
         eigvec = eigvec.flip(dims=(1,))  # sort from largest to smallest
-        eigval_col.append(eigval)
-        eigvec_col.append(eigvec)
-        covmats.append(covmat)
+        eigval_col.append(eigval.cpu())
+        eigvec_col.append(eigvec.cpu())
+        # covmats.append(covmat)
     eigval_mat = torch.stack(eigval_col, dim=0)
     eigvec_mat = torch.stack(eigvec_col, dim=0)
     freq_vec = torch.tensor(freq_col)
