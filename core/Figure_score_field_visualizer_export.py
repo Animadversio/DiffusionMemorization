@@ -56,62 +56,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 from torchvision.utils import make_grid
 from torchvision.utils import save_image
-
-# %%
-fid_batch_size = 100
-with torch.no_grad():
-    noise = torch.randn([fid_batch_size, config.channels, config.img_size, config.img_size],
-                        generator=torch.cuda.manual_seed(config.seed), device=config.device)
-    samples = edm_sampler(edm, noise, num_steps=config.total_steps, use_ema=False).detach().cpu()
-    samples.mul_(0.5).add_(0.5)
-samples = torch.clamp(samples, 0., 1.).cpu()
-# samples = np.clip(samples.permute(0, 2, 3, 1).cpu().numpy() * 255., 0, 255).astype(np.uint8)
-# samples = samples.reshape((-1, config.img_size, config.img_size, config.channels))
-# all_samples.append(samples)
-
-plt.figure(figsize=(10, 10))
-plt.imshow((make_grid(samples*255.0, nrow=10).permute(1, 2, 0)).numpy().astype(np.uint8))
-plt.axis('off')
-plt.show()
-
-# %% [markdown]
-# ### Load Dataset in EDM convention
-
-# %%
-transform = transforms.Compose([
-    torchvision.transforms.Resize(32), # config.img_size
-    transforms.ToTensor(),
-    transforms.Normalize((0.5,), (0.5,))
-])
-# Download and load the MNIST dataset
-train_edm_dataset = torchvision.datasets.MNIST(root='~/Datasets', train=True, transform=transform, download=False)
-test_edm_dataset = torchvision.datasets.MNIST(root='~/Datasets', train=False, transform=transform)
-
-edm_Xtsr = torch.stack([train_edm_dataset[i][0] for i in range(len(train_edm_dataset))])
-edm_Xmat = edm_Xtsr.view(edm_Xtsr.shape[0], -1).cuda()
-edm_Xtsr_test = torch.stack([test_edm_dataset[i][0] for i in range(len(test_edm_dataset))])
-edm_Xmat_test = edm_Xtsr_test.view(edm_Xtsr_test.shape[0], -1)
-ytsr_test = torch.tensor(test_edm_dataset.targets)
-
-edm_imgshape = tuple(edm_Xtsr.shape[1:])
-
-# %%
-edm_Xmean = edm_Xmat.mean(dim=0)
-edm_Xcov = torch.cov(edm_Xmat.T, )
-
-eigvals, eigvecs = torch.linalg.eigh(edm_Xcov)
-eigvals = torch.flip(eigvals, dims=(0,))
-eigvecs = torch.flip(eigvecs, dims=(1,))
-print(eigvals.shape, eigvecs.shape)
-print(eigvals[0:10].sqrt())
-
-# %% [markdown]
-# ## Visualize learned scores by projection
-
 # %% [markdown]
 # ### Util functions for 2d slicing projection
 
-# %%
 class CoordSystem:
     
     def __init__(self, basis1, basis2, origin=None):
@@ -193,184 +140,16 @@ def orthogonal_grid_torch(x1, x2, x3, grid_nums=(10, 10),
             torch.tensor(norm_coords), \
             torch.tensor(plane_coords), coordsys
 
-# %%
-torch.allclose(coordsys.ortho_project_vector(grid_vecs) + 
-               coordsys.project_vector(grid_vecs) @ coordsys.basis_matrix, 
-               grid_vecs, atol=1E-5)
-
-# %%
-grid_vecs, norm_coords, plane_coords, coordsys = orthogonal_grid_torch(
-        edm_Xmat[0, :], edm_Xmat[1, :], edm_Xmat[2, :], 
-        grid_nums=(16, 16), x_range=(-0.25, 1.25), y_range=(-0.25, 1.25))
-assert torch.allclose(plane_coords.cuda(), coordsys.project_points(grid_vecs))
-plt.scatter(plane_coords[:, 0], plane_coords[:, 1])
-
-# %%
-# Compute score on the grid points
-grid_vecs, norm_coords, plane_coords, coordsys = orthogonal_grid_torch(
-        edm_Xmat[0, :], edm_Xmat[1, :], edm_Xmat[2, :], 
-        grid_nums=(16, 16), x_range=(-0.25, 1.25), y_range=(-0.25, 1.25))
-sigma = 0.2
-edm_Dt = edm(grid_vecs.view(-1, *edm_imgshape), torch.tensor(sigma), None, use_ema=False).detach()
-score_edm = (edm_Dt.view(grid_vecs.shape) - grid_vecs) / (sigma**2)
-
-# %% [markdown]
-# ### Demo visualization
-
-# %%
-import matplotlib.pyplot as plt
-idxs = np.random.choice(edm_Xmat.shape[0], 3, replace=False)
-anchors = [edm_Xmat[idxs[0], :], edm_Xmat[idxs[1], :], edm_Xmat[idxs[2], :]]
-anchors_tsr = torch.stack(anchors)
-print(f"Score vector field among 3 random samples, {idxs} labels {ytsr[idxs].numpy()}")
-grid_vecs, norm_coords, plane_coords, coordsys = orthogonal_grid_torch(
-        *anchors, grid_nums=(25, 25), x_range=(-0.25, 1.25), y_range=(-0.25, 1.25))
-
-mtg = make_grid(grid_vecs.reshape(-1, *edm_imgshape), nrow=25)
-plt.figure(figsize=(10, 10))
-plt.imshow(mtg.permute(1, 2, 0).cpu().numpy())
-plt.axis('off')
-plt.show()
-epoch = 300000
-edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
-for sigma in [0.1, 0.2, 0.5, 1.0, 2.0, 5.0]:
-    edm_Dt = edm(grid_vecs.view(-1, *edm_imgshape), torch.tensor(sigma), None, use_ema=False).detach()
-    score_edm = (edm_Dt.view(grid_vecs.shape) - grid_vecs) / (sigma**2)
-    score_mean_Xt = mean_isotropic_score(grid_vecs, edm_Xmean, sigma)
-    score_mean_std_Xt = mean_isotropic_score(grid_vecs, edm_Xmean, sigma, sigma0=edm_std_mean)
-    score_gaussian_Xt = Gaussian_score(grid_vecs, edm_Xmean, edm_Xcov, sigma)
-    score_gaussian_reg_Xt = Gaussian_score(grid_vecs, edm_Xmean, edm_Xcov + torch.eye(edm_Xcov.shape[0]).to(device) * 1E-4, sigma)
-    # score_gaussian1st_Xt = Gaussian_1stexpens_score(grid_vecs, edm_Xmean, edm_Xcov, sigma)
-    # score_gaussian2nd_Xt = Gaussian_2ndexpens_score(grid_vecs, edm_Xmean, edm_Xcov, sigma)
-    score_gmm_Xt = delta_GMM_score(grid_vecs, edm_Xmat, sigma)
-    # Calculate the vector field
-    fig, axs = plt.subplots(1, 4, figsize=(20, 5))
-    for i, (name, vector_field) in enumerate([("edm NN", score_edm),
-                        ("gmm delta", score_gmm_Xt),
-                        ("gaussian", score_gaussian_Xt), 
-                        # ("gaussian regularize", score_gaussian_reg_Xt),
-                        ("mean isotropic", score_mean_Xt), 
-                        # ("mean + std isotropic", score_mean_std_Xt), 
-                        # ("gaussian 1st expansion", score_gaussian1st_Xt), 
-                        # ("gaussian 2nd expansion", score_gaussian2nd_Xt), 
-                        ]):
-        # Create a grid for the quiver plot
-        vec_proj = coordsys.project_vector(vector_field).cpu().numpy()
-        anchor_proj = coordsys.project_points(anchors_tsr).cpu().numpy()
-        axs[i].invert_yaxis()
-        axs[i].quiver(plane_coords[:, 1], plane_coords[:, 0], vec_proj[:, 1], vec_proj[:, 0], angles='xy')
-        axs[i].scatter(anchor_proj[:, 1], anchor_proj[:, 0], color='r', marker='x')
-        axs[i].set_aspect('equal')
-        axs[i].set_title(name+f" score vector field\nsigma={sigma:f}")
-    plt.show()
-
-
-# %%
-import matplotlib.pyplot as plt
-idxs = np.random.choice(edm_Xmat.shape[0], 3, replace=False)
-anchors = [edm_Xmat[idxs[0], :], edm_Xmat[idxs[1], :], edm_Xmat[idxs[2], :]]
-anchors_tsr = torch.stack(anchors)
-print(f"Score vector field among 3 random samples, {idxs} labels {ytsr[idxs].numpy()}")
-grid_vecs, norm_coords, plane_coords, coordsys = orthogonal_grid_torch(
-        *anchors, grid_nums=(25, 25), x_range=(-0.25, 1.25), y_range=(-0.25, 1.25))
-
-mtg = make_grid(grid_vecs.reshape(-1, *edm_imgshape), nrow=25)
-plt.figure(figsize=(10, 10))
-plt.imshow(mtg.permute(1, 2, 0).cpu().numpy())
-plt.axis('off')
-plt.show()
-epoch = 300000
-edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
-for sigma in [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 8.0]:
-    edm_Dt = edm(grid_vecs.view(-1, *edm_imgshape), torch.tensor(sigma), None, use_ema=False).detach()
-    score_edm = (edm_Dt.view(grid_vecs.shape) - grid_vecs) / (sigma**2)
-    score_mean_Xt = mean_isotropic_score(grid_vecs, edm_Xmean, sigma)
-    score_mean_std_Xt = mean_isotropic_score(grid_vecs, edm_Xmean, sigma, sigma0=edm_std_mean)
-    score_gaussian_Xt = Gaussian_score(grid_vecs, edm_Xmean, edm_Xcov, sigma)
-    score_gaussian_reg_Xt = Gaussian_score(grid_vecs, edm_Xmean, edm_Xcov + torch.eye(edm_Xcov.shape[0]).to(device) * 1E-4, sigma)
-    # score_gaussian1st_Xt = Gaussian_1stexpens_score(grid_vecs, edm_Xmean, edm_Xcov, sigma)
-    # score_gaussian2nd_Xt = Gaussian_2ndexpens_score(grid_vecs, edm_Xmean, edm_Xcov, sigma)
-    score_gmm_Xt = delta_GMM_score(grid_vecs, edm_Xmat, sigma)
-    # Calculate the vector field
-    fig, axs = plt.subplots(1, 4, figsize=(20, 5))
-    for i, (name, vector_field) in enumerate([("edm NN", score_edm),
-                        ("gmm delta", score_gmm_Xt),
-                        ("gaussian", score_gaussian_Xt), 
-                        # ("gaussian regularize", score_gaussian_reg_Xt),
-                        ("mean isotropic", score_mean_Xt), 
-                        # ("mean + std isotropic", score_mean_std_Xt), 
-                        # ("gaussian 1st expansion", score_gaussian1st_Xt), 
-                        # ("gaussian 2nd expansion", score_gaussian2nd_Xt), 
-                        ]):
-        # Create a grid for the quiver plot
-        vec_proj = coordsys.project_vector(vector_field).cpu().numpy()
-        anchor_proj = coordsys.project_points(anchors_tsr).cpu().numpy()
-        axs[i].invert_yaxis()
-        axs[i].quiver(plane_coords[:, 1], plane_coords[:, 0], vec_proj[:, 1], vec_proj[:, 0], angles='xy')
-        axs[i].scatter(anchor_proj[:, 1], anchor_proj[:, 0], color='r', marker='x')
-        axs[i].set_aspect('equal')
-        axs[i].set_title(name+f" score vector field\nsigma={sigma:f}")
-    plt.show()
-
-
-# %%
-import matplotlib.pyplot as plt
-dist2anchor = torch.cdist(edm_Xmat[0:1, :], edm_Xmat)
-knndist, knnidx = torch.topk(dist2anchor, k=3, dim=-1, largest=False)
-anchors = [edm_Xmat[knnidx[0,0], :], edm_Xmat[knnidx[0,1], :], edm_Xmat[knnidx[0,2], :]]
-# anchors = [edm_Xmat[idxs[0], :], edm_Xmat[idxs[1], :], edm_Xmat[idxs[2], :]]
-anchors_tsr = torch.stack(anchors)
-print(f"Score vector field among 3 random samples, {knnidx[0].cpu()} labels {ytsr[knnidx[0].cpu()].numpy()}")
-grid_vecs, norm_coords, plane_coords, coordsys = orthogonal_grid_torch(
-        *anchors, grid_nums=(25, 25), x_range=(-0.25, 1.25), y_range=(-0.25, 1.25))
-
-mtg = make_grid(grid_vecs.reshape(-1, *edm_imgshape), nrow=25)
-plt.figure(figsize=(10, 10))
-plt.imshow(mtg.permute(1, 2, 0).cpu().numpy())
-plt.axis('off')
-plt.show()
-epoch = 300000
-edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
-for sigma in [0.1, 0.2, 0.5, 1.0, 2.0, 5.0]:
-    edm_Dt = edm(grid_vecs.view(-1, *edm_imgshape), torch.tensor(sigma), None, use_ema=False).detach()
-    score_edm = (edm_Dt.view(grid_vecs.shape) - grid_vecs) / (sigma**2)
-    score_mean_Xt = mean_isotropic_score(grid_vecs, edm_Xmean, sigma)
-    score_mean_std_Xt = mean_isotropic_score(grid_vecs, edm_Xmean, sigma, sigma0=edm_std_mean)
-    score_gaussian_Xt = Gaussian_score(grid_vecs, edm_Xmean, edm_Xcov, sigma)
-    score_gaussian_reg_Xt = Gaussian_score(grid_vecs, edm_Xmean, edm_Xcov + torch.eye(edm_Xcov.shape[0]).to(device) * 1E-4, sigma)
-    # score_gaussian1st_Xt = Gaussian_1stexpens_score(grid_vecs, edm_Xmean, edm_Xcov, sigma)
-    # score_gaussian2nd_Xt = Gaussian_2ndexpens_score(grid_vecs, edm_Xmean, edm_Xcov, sigma)
-    score_gmm_Xt = delta_GMM_score(grid_vecs, edm_Xmat, sigma)
-    # Calculate the vector field
-    fig, axs = plt.subplots(1, 4, figsize=(20, 5))
-    for i, (name, vector_field) in enumerate([("edm NN", score_edm),
-                        ("gmm delta", score_gmm_Xt),
-                        ("gaussian", score_gaussian_Xt), 
-                        # ("gaussian regularize", score_gaussian_reg_Xt),
-                        ("mean isotropic", score_mean_Xt), 
-                        # ("mean + std isotropic", score_mean_std_Xt), 
-                        # ("gaussian 1st expansion", score_gaussian1st_Xt), 
-                        # ("gaussian 2nd expansion", score_gaussian2nd_Xt), 
-                        ]):
-        # Create a grid for the quiver plot
-        vec_proj = coordsys.project_vector(vector_field).cpu().numpy()
-        anchor_proj = coordsys.project_points(anchors_tsr).cpu().numpy()
-        axs[i].invert_yaxis()
-        axs[i].quiver(plane_coords[:, 1], plane_coords[:, 0], vec_proj[:, 1], vec_proj[:, 0], angles='xy')
-        axs[i].scatter(anchor_proj[:, 1], anchor_proj[:, 0], color='r', marker='x')
-        axs[i].set_aspect('equal')
-        axs[i].set_title(name+f" score vector field\nsigma={sigma:f}")
-    plt.show()
-
-
-# %%
-epoch = 200000
-edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
-
 # %% [markdown]
 # ### Visualization pipeline function
 
 # %%
+from core.analytical_score_lib import mean_isotropic_score, Gaussian_score, delta_GMM_score
+from core.analytical_score_lib import explained_var_vec
+from core.analytical_score_lib import sample_Xt_batch, sample_Xt_batch
+from core.gaussian_mixture_lib import gaussian_mixture_score_batch_sigma_torch, \
+    gaussian_mixture_lowrank_score_batch_sigma_torch, compute_cluster
+
 def score_slice_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape,
                            sigmas=[0.1, 0.2, 0.5, 1.0, 2.0, 5.0], titlestr="",
                            grid_nums=(25, 25), x_range=(-0.25, 1.25), y_range=(-0.25, 1.25)):
@@ -478,6 +257,229 @@ def score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, 
             # cbar.set_clim(0, vec_norm.max())
         plt.suptitle(f"score vector field {titlestr}\nsigma={sigma:f} magnitude={magnitude}")
         plt.show()
+
+# %%
+fid_batch_size = 100
+with torch.no_grad():
+    noise = torch.randn([fid_batch_size, config.channels, config.img_size, config.img_size],
+                        generator=torch.cuda.manual_seed(config.seed), device=config.device)
+    samples = edm_sampler(edm, noise, num_steps=config.total_steps, use_ema=False).detach().cpu()
+    samples.mul_(0.5).add_(0.5)
+samples = torch.clamp(samples, 0., 1.).cpu()
+# samples = np.clip(samples.permute(0, 2, 3, 1).cpu().numpy() * 255., 0, 255).astype(np.uint8)
+# samples = samples.reshape((-1, config.img_size, config.img_size, config.channels))
+# all_samples.append(samples)
+
+plt.figure(figsize=(10, 10))
+plt.imshow((make_grid(samples*255.0, nrow=10).permute(1, 2, 0)).numpy().astype(np.uint8))
+plt.axis('off')
+plt.show()
+
+# %% [markdown]
+# ### Load Dataset in EDM convention
+
+# %%
+transform = transforms.Compose([
+    torchvision.transforms.Resize(32), # config.img_size
+    transforms.ToTensor(),
+    transforms.Normalize((0.5,), (0.5,))
+])
+# Download and load the MNIST dataset
+train_edm_dataset = torchvision.datasets.MNIST(root='~/Datasets', train=True, transform=transform, download=False)
+test_edm_dataset = torchvision.datasets.MNIST(root='~/Datasets', train=False, transform=transform)
+
+edm_Xtsr = torch.stack([train_edm_dataset[i][0] for i in range(len(train_edm_dataset))])
+edm_Xmat = edm_Xtsr.view(edm_Xtsr.shape[0], -1).cuda()
+edm_Xtsr_test = torch.stack([test_edm_dataset[i][0] for i in range(len(test_edm_dataset))])
+edm_Xmat_test = edm_Xtsr_test.view(edm_Xtsr_test.shape[0], -1)
+ytsr_test = torch.tensor(test_edm_dataset.targets)
+edm_imgshape = tuple(edm_Xtsr.shape[1:])
+edm_Xmean = edm_Xmat.mean(dim=0)
+edm_Xcov = torch.cov(edm_Xmat.T, )
+
+eigvals, eigvecs = torch.linalg.eigh(edm_Xcov)
+eigvals = torch.flip(eigvals, dims=(0,))
+eigvecs = torch.flip(eigvecs, dims=(1,))
+print(eigvals.shape, eigvecs.shape)
+print(eigvals[0:10].sqrt())
+
+# %% [markdown]
+# ## Visualize learned scores by projection
+
+
+# %%
+# TODO Define test function for the score projection
+torch.allclose(coordsys.ortho_project_vector(grid_vecs) + 
+               coordsys.project_vector(grid_vecs) @ coordsys.basis_matrix, 
+               grid_vecs, atol=1E-5)
+
+# %%
+grid_vecs, norm_coords, plane_coords, coordsys = orthogonal_grid_torch(
+        edm_Xmat[0, :], edm_Xmat[1, :], edm_Xmat[2, :], 
+        grid_nums=(16, 16), x_range=(-0.25, 1.25), y_range=(-0.25, 1.25))
+assert torch.allclose(plane_coords.cuda(), coordsys.project_points(grid_vecs))
+plt.scatter(plane_coords[:, 0], plane_coords[:, 1])
+
+# %%
+# Compute score on the grid points
+grid_vecs, norm_coords, plane_coords, coordsys = orthogonal_grid_torch(
+        edm_Xmat[0, :], edm_Xmat[1, :], edm_Xmat[2, :], 
+        grid_nums=(16, 16), x_range=(-0.25, 1.25), y_range=(-0.25, 1.25))
+sigma = 0.2
+edm_Dt = edm(grid_vecs.view(-1, *edm_imgshape), torch.tensor(sigma), None, use_ema=False).detach()
+score_edm = (edm_Dt.view(grid_vecs.shape) - grid_vecs) / (sigma**2)
+
+# %% [markdown]
+# ### Demo visualization
+
+# %%
+idxs = np.random.choice(edm_Xmat.shape[0], 3, replace=False)
+anchors = [edm_Xmat[idxs[0], :], edm_Xmat[idxs[1], :], edm_Xmat[idxs[2], :]]
+anchors_tsr = torch.stack(anchors)
+print(f"Score vector field among 3 random samples, {idxs} labels {ytsr[idxs].numpy()}")
+grid_vecs, norm_coords, plane_coords, coordsys = orthogonal_grid_torch(
+        *anchors, grid_nums=(25, 25), x_range=(-0.25, 1.25), y_range=(-0.25, 1.25))
+
+mtg = make_grid(grid_vecs.reshape(-1, *edm_imgshape), nrow=25)
+plt.figure(figsize=(10, 10))
+plt.imshow(mtg.permute(1, 2, 0).cpu().numpy())
+plt.axis('off')
+plt.show()
+epoch = 300000
+edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
+for sigma in [0.1, 0.2, 0.5, 1.0, 2.0, 5.0]:
+    edm_Dt = edm(grid_vecs.view(-1, *edm_imgshape), torch.tensor(sigma), None, use_ema=False).detach()
+    score_edm = (edm_Dt.view(grid_vecs.shape) - grid_vecs) / (sigma**2)
+    score_mean_Xt = mean_isotropic_score(grid_vecs, edm_Xmean, sigma)
+    score_mean_std_Xt = mean_isotropic_score(grid_vecs, edm_Xmean, sigma, sigma0=edm_std_mean)
+    score_gaussian_Xt = Gaussian_score(grid_vecs, edm_Xmean, edm_Xcov, sigma)
+    score_gaussian_reg_Xt = Gaussian_score(grid_vecs, edm_Xmean, edm_Xcov + torch.eye(edm_Xcov.shape[0]).to(device) * 1E-4, sigma)
+    # score_gaussian1st_Xt = Gaussian_1stexpens_score(grid_vecs, edm_Xmean, edm_Xcov, sigma)
+    # score_gaussian2nd_Xt = Gaussian_2ndexpens_score(grid_vecs, edm_Xmean, edm_Xcov, sigma)
+    score_gmm_Xt = delta_GMM_score(grid_vecs, edm_Xmat, sigma)
+    # Calculate the vector field
+    fig, axs = plt.subplots(1, 4, figsize=(20, 5))
+    for i, (name, vector_field) in enumerate([("edm NN", score_edm),
+                        ("gmm delta", score_gmm_Xt),
+                        ("gaussian", score_gaussian_Xt), 
+                        # ("gaussian regularize", score_gaussian_reg_Xt),
+                        ("mean isotropic", score_mean_Xt), 
+                        # ("mean + std isotropic", score_mean_std_Xt), 
+                        # ("gaussian 1st expansion", score_gaussian1st_Xt), 
+                        # ("gaussian 2nd expansion", score_gaussian2nd_Xt), 
+                        ]):
+        # Create a grid for the quiver plot
+        vec_proj = coordsys.project_vector(vector_field).cpu().numpy()
+        anchor_proj = coordsys.project_points(anchors_tsr).cpu().numpy()
+        axs[i].invert_yaxis()
+        axs[i].quiver(plane_coords[:, 1], plane_coords[:, 0], vec_proj[:, 1], vec_proj[:, 0], angles='xy')
+        axs[i].scatter(anchor_proj[:, 1], anchor_proj[:, 0], color='r', marker='x')
+        axs[i].set_aspect('equal')
+        axs[i].set_title(name+f" score vector field\nsigma={sigma:f}")
+    plt.show()
+
+
+# %%
+idxs = np.random.choice(edm_Xmat.shape[0], 3, replace=False)
+anchors = [edm_Xmat[idxs[0], :], edm_Xmat[idxs[1], :], edm_Xmat[idxs[2], :]]
+anchors_tsr = torch.stack(anchors)
+print(f"Score vector field among 3 random samples, {idxs} labels {ytsr[idxs].numpy()}")
+grid_vecs, norm_coords, plane_coords, coordsys = orthogonal_grid_torch(
+        *anchors, grid_nums=(25, 25), x_range=(-0.25, 1.25), y_range=(-0.25, 1.25))
+
+mtg = make_grid(grid_vecs.reshape(-1, *edm_imgshape), nrow=25)
+plt.figure(figsize=(10, 10))
+plt.imshow(mtg.permute(1, 2, 0).cpu().numpy())
+plt.axis('off')
+plt.show()
+epoch = 300000
+edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
+for sigma in [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 8.0]:
+    edm_Dt = edm(grid_vecs.view(-1, *edm_imgshape), torch.tensor(sigma), None, use_ema=False).detach()
+    score_edm = (edm_Dt.view(grid_vecs.shape) - grid_vecs) / (sigma**2)
+    score_mean_Xt = mean_isotropic_score(grid_vecs, edm_Xmean, sigma)
+    score_mean_std_Xt = mean_isotropic_score(grid_vecs, edm_Xmean, sigma, sigma0=edm_std_mean)
+    score_gaussian_Xt = Gaussian_score(grid_vecs, edm_Xmean, edm_Xcov, sigma)
+    score_gaussian_reg_Xt = Gaussian_score(grid_vecs, edm_Xmean, edm_Xcov + torch.eye(edm_Xcov.shape[0]).to(device) * 1E-4, sigma)
+    # score_gaussian1st_Xt = Gaussian_1stexpens_score(grid_vecs, edm_Xmean, edm_Xcov, sigma)
+    # score_gaussian2nd_Xt = Gaussian_2ndexpens_score(grid_vecs, edm_Xmean, edm_Xcov, sigma)
+    score_gmm_Xt = delta_GMM_score(grid_vecs, edm_Xmat, sigma)
+    # Calculate the vector field
+    fig, axs = plt.subplots(1, 4, figsize=(20, 5))
+    for i, (name, vector_field) in enumerate([("edm NN", score_edm),
+                        ("gmm delta", score_gmm_Xt),
+                        ("gaussian", score_gaussian_Xt), 
+                        # ("gaussian regularize", score_gaussian_reg_Xt),
+                        ("mean isotropic", score_mean_Xt), 
+                        # ("mean + std isotropic", score_mean_std_Xt), 
+                        # ("gaussian 1st expansion", score_gaussian1st_Xt), 
+                        # ("gaussian 2nd expansion", score_gaussian2nd_Xt), 
+                        ]):
+        # Create a grid for the quiver plot
+        vec_proj = coordsys.project_vector(vector_field).cpu().numpy()
+        anchor_proj = coordsys.project_points(anchors_tsr).cpu().numpy()
+        axs[i].invert_yaxis()
+        axs[i].quiver(plane_coords[:, 1], plane_coords[:, 0], vec_proj[:, 1], vec_proj[:, 0], angles='xy')
+        axs[i].scatter(anchor_proj[:, 1], anchor_proj[:, 0], color='r', marker='x')
+        axs[i].set_aspect('equal')
+        axs[i].set_title(name+f" score vector field\nsigma={sigma:f}")
+    plt.show()
+
+
+# %%
+import matplotlib.pyplot as plt
+dist2anchor = torch.cdist(edm_Xmat[0:1, :], edm_Xmat)
+knndist, knnidx = torch.topk(dist2anchor, k=3, dim=-1, largest=False)
+anchors = [edm_Xmat[knnidx[0,0], :], edm_Xmat[knnidx[0,1], :], edm_Xmat[knnidx[0,2], :]]
+# anchors = [edm_Xmat[idxs[0], :], edm_Xmat[idxs[1], :], edm_Xmat[idxs[2], :]]
+anchors_tsr = torch.stack(anchors)
+print(f"Score vector field among 3 random samples, {knnidx[0].cpu()} labels {ytsr[knnidx[0].cpu()].numpy()}")
+grid_vecs, norm_coords, plane_coords, coordsys = orthogonal_grid_torch(
+        *anchors, grid_nums=(25, 25), x_range=(-0.25, 1.25), y_range=(-0.25, 1.25))
+
+mtg = make_grid(grid_vecs.reshape(-1, *edm_imgshape), nrow=25)
+plt.figure(figsize=(10, 10))
+plt.imshow(mtg.permute(1, 2, 0).cpu().numpy())
+plt.axis('off')
+plt.show()
+epoch = 300000
+edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
+for sigma in [0.1, 0.2, 0.5, 1.0, 2.0, 5.0]:
+    edm_Dt = edm(grid_vecs.view(-1, *edm_imgshape), torch.tensor(sigma), None, use_ema=False).detach()
+    score_edm = (edm_Dt.view(grid_vecs.shape) - grid_vecs) / (sigma**2)
+    score_mean_Xt = mean_isotropic_score(grid_vecs, edm_Xmean, sigma)
+    score_mean_std_Xt = mean_isotropic_score(grid_vecs, edm_Xmean, sigma, sigma0=edm_std_mean)
+    score_gaussian_Xt = Gaussian_score(grid_vecs, edm_Xmean, edm_Xcov, sigma)
+    score_gaussian_reg_Xt = Gaussian_score(grid_vecs, edm_Xmean, edm_Xcov + torch.eye(edm_Xcov.shape[0]).to(device) * 1E-4, sigma)
+    # score_gaussian1st_Xt = Gaussian_1stexpens_score(grid_vecs, edm_Xmean, edm_Xcov, sigma)
+    # score_gaussian2nd_Xt = Gaussian_2ndexpens_score(grid_vecs, edm_Xmean, edm_Xcov, sigma)
+    score_gmm_Xt = delta_GMM_score(grid_vecs, edm_Xmat, sigma)
+    # Calculate the vector field
+    fig, axs = plt.subplots(1, 4, figsize=(20, 5))
+    for i, (name, vector_field) in enumerate([("edm NN", score_edm),
+                        ("gmm delta", score_gmm_Xt),
+                        ("gaussian", score_gaussian_Xt), 
+                        # ("gaussian regularize", score_gaussian_reg_Xt),
+                        ("mean isotropic", score_mean_Xt), 
+                        # ("mean + std isotropic", score_mean_std_Xt), 
+                        # ("gaussian 1st expansion", score_gaussian1st_Xt), 
+                        # ("gaussian 2nd expansion", score_gaussian2nd_Xt), 
+                        ]):
+        # Create a grid for the quiver plot
+        vec_proj = coordsys.project_vector(vector_field).cpu().numpy()
+        anchor_proj = coordsys.project_points(anchors_tsr).cpu().numpy()
+        axs[i].invert_yaxis()
+        axs[i].quiver(plane_coords[:, 1], plane_coords[:, 0], vec_proj[:, 1], vec_proj[:, 0], angles='xy')
+        axs[i].scatter(anchor_proj[:, 1], anchor_proj[:, 0], color='r', marker='x')
+        axs[i].set_aspect('equal')
+        axs[i].set_title(name+f" score vector field\nsigma={sigma:f}")
+    plt.show()
+
+
+# %%
+epoch = 200000
+edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
+
 
 # %% [markdown]
 # #### Off plane component of score vector

@@ -162,12 +162,10 @@ def visualize_gmm_lowrank_residual(res_mats, xvar="n_rank", yvar="residual", hue
         lineplot_with_log_color_scale(res_mat, xvar, yvar, huevar, 
                                       cmap="turbo", ax=axs[i], legend=False,
                                       lw=1.5, marker="o", markersize=5, alpha=0.4)
-        # axs[i].tick_params(axis='x', labelsize=17)
-        # axs[i].tick_params(axis='y', labelsize=17)
         # increase font size of minor ticks
         axs[i].tick_params(axis='both', which='major', labelsize=18)
         axs[i].tick_params(axis='both', which='minor', labelsize=16)
-        axs[i].set_title(f"sigma={sigma}", fontsize=18)
+        axs[i].set_title(f"sigma={sigma}", fontsize=20, y=0.94)
         axs[i].set_ylabel(f"{varname} EV Residual", fontsize=18)
         axs[i].set_xlabel(xname, fontsize=18)
         # set y-axis label for the left column
@@ -181,7 +179,8 @@ def visualize_gmm_lowrank_residual(res_mats, xvar="n_rank", yvar="residual", hue
                           title=hname, title_fontsize=18)
     
     plt.suptitle(f"{varname} Residual of EDM vs GMM score | {runname} ", fontsize=24)
-    plt.tight_layout()
+    plt.subplots_adjust(left=None, bottom=None, right=None, top=None, wspace=None, hspace=None)
+    # plt.tight_layout()
     saveallforms(figsumdir, savename, figh, ["pdf", "png"])
     plt.show()
     return figh, axs
@@ -336,17 +335,6 @@ visualize_gmm_lowrank_residual_heatmap_separate(res_mat_Dt,
         xvar="n_rank", yvar="n_clusters", plotvar="Dt_residual",
         runname="MNIST mini EDM",
         savename="MNIST_miniEDM_GMM_lowrank_denoiser_residual_heatmap",);
-#%%
-sigma = 1.0
-lineplot_with_log_color_scale(res_mat_score[1.0], "n_clusters", "residual", "n_rank", 
-                              cmap="turbo", ax=None, 
-                              lw=1.5, marker="o", markersize=5, alpha=0.4)
-plt.title(f"Score Residual of GMM MNIST Dataset | sigma={sigma:.2f}")
-plt.ylabel("Score EV Residual")
-plt.xlabel("Number of Modes")
-plt.legend(title='n_rank')
-plt.show()
-
 
 
 
@@ -405,11 +393,24 @@ visualize_gmm_lowrank_residual_heatmap_separate(res_mat_Dt,
  
 
 
-
+#%%
 
 
 
 #%% Scratch zone 
+#%%
+sigma = 1.0
+lineplot_with_log_color_scale(res_mat_score[1.0], "n_clusters", "residual", "n_rank", 
+                              cmap="turbo", ax=None, 
+                              lw=1.5, marker="o", markersize=5, alpha=0.4)
+plt.title(f"Score Residual of GMM MNIST Dataset | sigma={sigma:.2f}")
+plt.ylabel("Score EV Residual")
+plt.xlabel("Number of Modes")
+plt.legend(title='n_rank')
+plt.show()
+
+
+
 #%%
 # sigma = 1.5
 # runname = "CIFAR10 uncond EDM pretrained"
