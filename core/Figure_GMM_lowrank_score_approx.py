@@ -1,10 +1,12 @@
+
 #%%
-%load_ext autoreload
-%autoreload 2
+# %load_ext autoreload
+# %autoreload 2
 #%%
 import os
 import sys
 from os.path import join
+from sympy import plot
 from tqdm import tqdm, trange
 import pandas as pd
 import numpy as np
@@ -22,15 +24,12 @@ pd.set_option('display.max_rows', 500)
 pd.set_option('display.max_columns', 500)
 pd.set_option('display.width', 1000)
 
-#%%
 figroot = "/n/holylabs/LABS/kempner_fellows/Users/binxuwang/DL_Projects/DiffusionHiddenLinear"
 figsumdir = join(figroot, "GMM_lowrk_approx_summary")
 os.makedirs(figsumdir, exist_ok=True)
 
-
-
-# %%
 #%%
+from matplotlib.ticker import MaxNLocator
 import matplotlib.colors as mcolors
 import numpy as np
 import matplotlib.pyplot as plt
@@ -40,6 +39,7 @@ import matplotlib.colors as mcolors
 def extract_res_mats(df_gmm_rk, varname="St_residual", 
                      n_clusters_list=None, n_rank_list=None, 
                      sigmas=None, ):
+    
     # sigmas = [1.0e-02, 5.0e-02, 1.0e-01, 5.0e-01, 1.0e+00, 1.5e+00, 2.0e+00, 5.0e+00, 1.0e+01, 2.0e+01, ]
     # n_clusters_list = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]
     # n_rank_list = [8, 16, 32, 64, 96, 128, 256, 512, 768, 1024]
@@ -62,15 +62,15 @@ def extract_res_mats(df_gmm_rk, varname="St_residual",
                                 (df_gmm_rk.sigma == sigma)][varname].values
                 # Ensure the result is not empty before appending
                 if res.size > 0:
-                    res_mat.append({"n_clusters": n_clusters, "n_rank": n_rank, "residual": res[0]})
+                    res_mat.append({"n_clusters": n_clusters, "n_rank": n_rank, varname: res[0]})
                 else:
                     # Handle the case where the result might be empty
-                    res_mat.append({"n_clusters": n_clusters, "n_rank": n_rank, "residual": None})
+                    res_mat.append({"n_clusters": n_clusters, "n_rank": n_rank, varname: None})
         
         res_mat = pd.DataFrame(res_mat)
         res_mats[sigma] = res_mat
         res_mat_pivot = res_mat.pivot_table(index="n_clusters", columns="n_rank",
-                                           values="residual", aggfunc="mean")
+                                           values=varname, aggfunc="mean")
         res_mat_pivots[sigma] = res_mat_pivot
     return res_mats, res_mat_pivots
 
@@ -129,7 +129,8 @@ def lineplot_with_log_color_scale(data, x_col, y_col, hue_col, cmap='turbo',
 def visualize_gmm_lowrank_residual(res_mats, xvar="n_rank", yvar="residual", huevar="n_clusters", 
                        sigmas=[1.0e-02, 5.0e-02, 1.0e-01, 5.0e-01, 1.0e+00, 
                                1.5e+00, 2.0e+00, 5.0e+00, 1.0e+01, 2.0e+01, ], 
-                       figsize=(22.5, 8), runname="MNIST miniEDM",):
+                       figsize=(22.5, 8), nrowcols=(2, 5), runname="MNIST miniEDM",
+                       savename="MNIST_GMM_lowrank_residual_nrank_hue_Ncomp",):
     """
     Plots the score residual of GMM MNIST dataset for varying sigma values.
 
@@ -148,7 +149,11 @@ def visualize_gmm_lowrank_residual(res_mats, xvar="n_rank", yvar="residual", hue
         hname = "Rank of Mode"
     elif huevar == "n_clusters":
         hname = "Num of Modes"
-    nrow, ncol = 2, 5
+    if yvar == "St_residual":
+        varname = "Score"
+    elif yvar == "Dt_residual":
+        varname = "Denoiser"
+    nrow, ncol = nrowcols
     figh, axs = plt.subplots(nrow, ncol, figsize=figsize)
     axs = axs.flatten()
     for i, sigma in enumerate(sigmas):
@@ -157,11 +162,14 @@ def visualize_gmm_lowrank_residual(res_mats, xvar="n_rank", yvar="residual", hue
         lineplot_with_log_color_scale(res_mat, xvar, yvar, huevar, 
                                       cmap="turbo", ax=axs[i], legend=False,
                                       lw=1.5, marker="o", markersize=5, alpha=0.4)
-        axs[i].tick_params(axis='x', labelsize=14)
-        axs[i].tick_params(axis='y', labelsize=14)
-        axs[i].set_title(f"sigma={sigma}", fontsize=16)
-        axs[i].set_ylabel("Score EV Residual", fontsize=14)
-        axs[i].set_xlabel(xname, fontsize=14)
+        # axs[i].tick_params(axis='x', labelsize=17)
+        # axs[i].tick_params(axis='y', labelsize=17)
+        # increase font size of minor ticks
+        axs[i].tick_params(axis='both', which='major', labelsize=18)
+        axs[i].tick_params(axis='both', which='minor', labelsize=16)
+        axs[i].set_title(f"sigma={sigma}", fontsize=18)
+        axs[i].set_ylabel(f"{varname} EV Residual", fontsize=18)
+        axs[i].set_xlabel(xname, fontsize=18)
         # set y-axis label for the left column
         if not (i % ncol == 0):
             axs[i].set_ylabel("")
@@ -169,15 +177,117 @@ def visualize_gmm_lowrank_residual(res_mats, xvar="n_rank", yvar="residual", hue
         if not (i >= (ncol * (nrow - 1))):
             axs[i].set_xlabel("")
         if i == (ncol * nrow - 1):
-            axs[i].legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=14,
-                          title=hname, title_fontsize=14)
+            axs[i].legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=18,
+                          title=hname, title_fontsize=18)
     
-    plt.suptitle(f"Score Residual of GMM {runname} Dataset ", fontsize=20)
+    plt.suptitle(f"{varname} Residual of EDM vs GMM score | {runname} ", fontsize=24)
     plt.tight_layout()
+    saveallforms(figsumdir, savename, figh, ["pdf", "png"])
     plt.show()
     return figh, axs
 
-#%%
+
+def visualize_gmm_lowrank_residual_heatmap(res_mats, 
+                        yvar="n_rank", xvar="n_clusters", plotvar="St_residual",
+                       sigmas=[1.0e-02, 5.0e-02, 1.0e-01, 5.0e-01, 1.0e+00, 
+                               1.5e+00, 2.0e+00, 5.0e+00, 1.0e+01, 2.0e+01, ], 
+                       figsize=(22.5, 8), nrowcols=(2, 5), runname="MNIST miniEDM",
+                       savename="MNIST_GMM_lowrank_residual_heatmap",):
+    """
+    Plots the score residual of GMM MNIST dataset for varying sigma values.
+
+    Parameters:
+    - df_gmm_rk: DataFrame containing the GMM data.
+    - sigmas: List of sigma values to plot.
+    - n_clusters_list: List of n_clusters values to consider.
+    - n_rank_list: List of n_rank values to consider.
+    - figsize: Tuple indicating figure size.
+    """
+    if xvar == "n_rank":
+        xname = "Rank of Mode"
+    elif xvar == "n_clusters":
+        xname = "Num of Modes"
+    if plotvar == "St_residual":
+        varname = "Score"
+    elif plotvar == "Dt_residual":
+        varname = "Denoiser"
+    nrow, ncol = nrowcols
+    figh, axs = plt.subplots(nrow, ncol, figsize=figsize)
+    axs = axs.flatten()
+    for i, sigma in enumerate(sigmas):
+        res_mat = res_mats[sigma]
+        res_mat_pivot = res_mat.pivot_table(index=xvar, columns=yvar,
+                            values=plotvar, aggfunc="mean")
+        sns.heatmap(res_mat_pivot, annot=True, fmt=".2f", 
+            cmap="YlGnBu", ax=axs[i])#norm=norm_scale)
+        axs[i].set_title(f"sigma={sigma}", fontsize=16)
+        # axs[i].set_ylabel("Score EV Residual", fontsize=14)
+        # axs[i].set_xlabel(xname, fontsize=14)
+        # set y-axis label for the left column
+        if not (i % ncol == 0):
+            axs[i].set_ylabel("")
+        # Set x-axis label for the bottom row others as empty
+        if not (i >= (ncol * (nrow - 1))):
+            axs[i].set_xlabel("")
+    
+    plt.suptitle(f"{varname} Residual of GMM {runname} Dataset ", fontsize=20)
+    plt.tight_layout()
+    saveallforms(figsumdir, savename, figh, ["pdf", "png"])
+    plt.show()
+    return figh, axs
+
+
+def visualize_gmm_lowrank_residual_heatmap_separate(res_mats, 
+                        yvar="n_clusters", xvar="n_rank", plotvar="St_residual",
+                       sigmas=[1.0e-02, 5.0e-02, 1.0e-01, 5.0e-01, 1.0e+00, 
+                               1.5e+00, 2.0e+00, 5.0e+00, 1.0e+01, 2.0e+01, ], 
+                       figsize=(7, 6), runname="MNIST miniEDM",
+                       savename="MNIST_GMM_lowrank_residual_heatmap",):
+    """
+    Plots the score residual of GMM MNIST dataset for varying sigma values.
+
+    Parameters:
+    - df_gmm_rk: DataFrame containing the GMM data.
+    - sigmas: List of sigma values to plot.
+    - n_clusters_list: List of n_clusters values to consider.
+    - n_rank_list: List of n_rank values to consider.
+    - figsize: Tuple indicating figure size.
+    """
+    if xvar == "n_rank":
+        xname = "Rank of Mode"
+    elif xvar == "n_clusters":
+        xname = "Num of Modes"
+    if yvar == "n_rank":
+        yname = "Rank of Mode"
+    elif yvar == "n_clusters":
+        yname = "Num of Modes"
+    if plotvar == "St_residual":
+        varname = "Score"
+    elif plotvar == "Dt_residual":
+        varname = "Denoiser"
+    for i, sigma in enumerate(sigmas):
+        res_mat = res_mats[sigma]
+        res_mat_pivot = res_mat.pivot_table(index=yvar, columns=xvar,
+                            values=plotvar, aggfunc="mean")
+        # use this to show only the significant digits in the heatmap, not the exponent
+        magnif_const = 10**(np.round(np.log10(res_mat_pivot.min().min())))
+        # def custom_format(x):
+        #     return f"{x:.1e}".split('e')[0]
+        def custom_format(x):
+            return f"{x / magnif_const:.1f}"
+        res_pivot_fmt = res_mat_pivot.applymap(custom_format)
+        figh, ax = plt.subplots(1, 1, figsize=figsize)
+        sns.heatmap(res_mat_pivot, annot=res_pivot_fmt, fmt='',
+            cmap="YlGnBu", ax=ax) 
+        # sns.heatmap(res_mat_pivot, annot=True, fmt=".2f", 
+        #     cmap="YlGnBu", ax=ax)#norm=norm_scale)
+        ax.set_title(f"{varname} Residual of EDM vs GMM (x {magnif_const:.0e})\n {runname} | sigma={sigma}", fontsize=17)
+        ax.set_ylabel(yname, fontsize=16)
+        ax.set_xlabel(xname, fontsize=16)
+        plt.tight_layout()
+        saveallforms(figsumdir, savename+f"_sigma{sigma}", figh, ["pdf", "png"])
+        plt.show()
+    return
 
 # %% [markdown]
 # ### MNIST score with varying rank and components
@@ -189,19 +299,46 @@ df_gmm_rk["Dt_residual"] = 1 - df_gmm_rk["Dt_EV"]
 df_gmm_rk[['n_cluster', 'n_rank']] = df_gmm_rk['name'].str.extract(r'gmm_(\d+)_mode_(\d+)_rank')
 df_gmm_rk['n_cluster'] = df_gmm_rk['n_cluster'].astype(float)
 df_gmm_rk['n_rank'] = df_gmm_rk['n_rank'].astype(float)
-
-res_mat_all_sigma, res_mat_pivot_all_sigma = extract_res_mats(df_gmm_rk, varname="St_residual",)
-
+#%%
+res_mat_score, _ = extract_res_mats(df_gmm_rk, varname="St_residual",)
+visualize_gmm_lowrank_residual(res_mat_score, 
+    xvar="n_rank", huevar="n_clusters", yvar="St_residual",
+    runname="MNIST mini EDM",
+    savename="MNIST_miniEDM_GMM_lowrank_score_residual_x_nrank_hue_ncomp",);
+visualize_gmm_lowrank_residual(res_mat_score, 
+    xvar="n_clusters", huevar="n_rank", yvar="St_residual", 
+    runname="MNIST mini EDM",
+    savename="MNIST_miniEDM_GMM_lowrank_score_residual_x_ncomp_hue_nrank",);
+visualize_gmm_lowrank_residual_heatmap_separate(res_mat_score,
+        xvar="n_rank", yvar="n_clusters", plotvar="St_residual",
+        runname="MNIST mini EDM",
+        savename="MNIST_miniEDM_GMM_lowrank_score_residual_heatmap",);
+#%%
+res_mat_score, _ = extract_res_mats(df_gmm_rk, varname="St_residual",)
+visualize_gmm_lowrank_residual(res_mat_score, 
+    xvar="n_rank", huevar="n_clusters", yvar="St_residual",
+    sigmas=[1.5e+00, 2.0e+00, 5.0e+00, 1.0e+01, 2.0e+01, 3.0e+01,
+       4.0e+01, 8.0e+01], nrowcols=(2, 4),figsize=(19, 8),
+    runname="MNIST mini EDM",
+    savename="MNIST_miniEDM_GMM_lowrank_score_residual_x_nrank_hue_ncomp_largesigma",);
 
 #%%
-visualize_gmm_lowrank_residual(res_mat_all_sigma, xvar="n_rank", huevar="n_clusters",
-                               runname="MNIST mini EDM",);
-visualize_gmm_lowrank_residual(res_mat_all_sigma, xvar="n_clusters", huevar="n_rank",
-                               runname="MNIST mini EDM",);
-
+res_mat_Dt, _ = extract_res_mats(df_gmm_rk, varname="Dt_residual",)
+visualize_gmm_lowrank_residual(res_mat_Dt, 
+    xvar="n_rank", huevar="n_clusters", yvar="Dt_residual",
+    runname="MNIST mini EDM",
+    savename="MNIST_miniEDM_GMM_lowrank_denoiser_residual_x_nrank_hue_ncomp",);
+visualize_gmm_lowrank_residual(res_mat_Dt, 
+    xvar="n_clusters", huevar="n_rank", yvar="Dt_residual", 
+    runname="MNIST mini EDM",
+    savename="MNIST_miniEDM_GMM_lowrank_denoiser_residual_x_ncomp_hue_nrank",);
+visualize_gmm_lowrank_residual_heatmap_separate(res_mat_Dt,
+        xvar="n_rank", yvar="n_clusters", plotvar="Dt_residual",
+        runname="MNIST mini EDM",
+        savename="MNIST_miniEDM_GMM_lowrank_denoiser_residual_heatmap",);
 #%%
 sigma = 1.0
-lineplot_with_log_color_scale(res_mat_all_sigma[1.0], "n_clusters", "residual", "n_rank", 
+lineplot_with_log_color_scale(res_mat_score[1.0], "n_clusters", "residual", "n_rank", 
                               cmap="turbo", ax=None, 
                               lw=1.5, marker="o", markersize=5, alpha=0.4)
 plt.title(f"Score Residual of GMM MNIST Dataset | sigma={sigma:.2f}")
@@ -209,6 +346,11 @@ plt.ylabel("Score EV Residual")
 plt.xlabel("Number of Modes")
 plt.legend(title='n_rank')
 plt.show()
+
+
+
+
+
 
 
 #%% [markdown]
@@ -221,37 +363,72 @@ df_gmm_rk["Dt_residual"] = 1 - df_gmm_rk["Dt_EV"]
 df_gmm_rk[['n_cluster', 'n_rank']] = df_gmm_rk['name'].str.extract(r'gmm_(\d+)_mode_(\d+)_rank')
 df_gmm_rk['n_cluster'] = df_gmm_rk['n_cluster'].astype(float)
 df_gmm_rk['n_rank'] = df_gmm_rk['n_rank'].astype(float)
-
-res_mat_all_sigma, res_mat_pivot_all_sigma = extract_res_mats(df_gmm_rk, varname="St_residual",)
+#%%
+res_mat_score, res_mat_score_pivot = extract_res_mats(df_gmm_rk, varname="St_residual",)
+visualize_gmm_lowrank_residual(res_mat_score, 
+    xvar="n_rank", huevar="n_clusters", yvar="St_residual",
+    runname="CIFAR10 uncond EDM pretrained",
+    savename="CIFAR_uncond_EDM_GMM_lowrank_score_residual_x_nrank_hue_ncomp",);
+visualize_gmm_lowrank_residual(res_mat_score, 
+    xvar="n_clusters", huevar="n_rank", yvar="St_residual", 
+    runname="CIFAR10 uncond EDM pretrained",
+    savename="CIFAR_uncond_EDM_GMM_lowrank_score_residual_x_ncomp_hue_nrank",);
+visualize_gmm_lowrank_residual_heatmap_separate(res_mat_score,
+        xvar="n_rank", yvar="n_clusters", plotvar="St_residual",
+        runname="CIFAR10 uncond EDM pretrained",
+        savename="CIFAR_uncond_GMM_lowrank_score_residual_heatmap",);
+#%%
+res_mat_score, _ = extract_res_mats(df_gmm_rk, varname="St_residual",)
+visualize_gmm_lowrank_residual(res_mat_score, 
+    xvar="n_rank", huevar="n_clusters", yvar="St_residual",
+    sigmas=[1.5e+00, 2.0e+00, 5.0e+00, 1.0e+01, 2.0e+01, 3.0e+01,
+       4.0e+01, 8.0e+01], nrowcols=(2, 4),figsize=(19, 8),
+    runname="CIFAR10 uncond EDM pretrained",
+    savename="CIFAR_uncond_GMM_lowrank_score_residual_x_nrank_hue_ncomp_largesigma",);
 
 #%%
-visualize_gmm_lowrank_residual(res_mat_all_sigma, xvar="n_rank", huevar="n_clusters",
-                               runname="CIFAR10 uncond EDM pretrained",);
-visualize_gmm_lowrank_residual(res_mat_all_sigma, xvar="n_clusters", huevar="n_rank",
-                               runname="CIFAR10 uncond EDM pretrained",);
-#%%
-from matplotlib.ticker import MaxNLocator
-sigma = 1.5
-runname = "CIFAR10 uncond EDM pretrained"
-norm_scale = LogNorm(vmin=res_mat_pivot_all_sigma[sigma].min().min(), 
-                    vmax=res_mat_pivot_all_sigma[sigma].min().max())
-plt.figure(figsize=(10, 8))
-sns.heatmap(res_mat_pivot_all_sigma[sigma], annot=True, fmt=".2f", 
-            cmap="YlGnBu", )#norm=norm_scale)
-plt.title(f"Score EV Residual Matrix of {runname} | sigma=%.2f" % sigma)
-plt.ylabel("Number of Modes")
-plt.xlabel("Rank of Mode")
-# Increase the number of ticks
-cbar = plt.gca().collections[0].colorbar
-cbar.locator = MaxNLocator(nbins='auto')  # 'auto' can be replaced with a specific number for more control
-cbar.update_ticks()
-# saveallforms(figsumdir, f"MNIST_GMM_rank_residual_heatmap_sigma{sigma}")
-plt.show()
+res_mat_Dt, res_mat_Dt_pivot = extract_res_mats(df_gmm_rk, varname="Dt_residual",)
+visualize_gmm_lowrank_residual(res_mat_Dt, 
+    xvar="n_rank", huevar="n_clusters", yvar="Dt_residual",
+    runname="CIFAR10 uncond EDM pretrained",
+    savename="CIFAR_uncond_GMM_lowrank_denoiser_residual_x_nrank_hue_ncomp",);
+visualize_gmm_lowrank_residual(res_mat_Dt, 
+    xvar="n_clusters", huevar="n_rank", yvar="Dt_residual", 
+    runname="CIFAR10 uncond EDM pretrained",
+    savename="CIFAR_uncond_GMM_lowrank_denoiser_residual_x_ncomp_hue_nrank",);
+visualize_gmm_lowrank_residual_heatmap_separate(res_mat_Dt,
+        xvar="n_rank", yvar="n_clusters", plotvar="Dt_residual",
+        runname="CIFAR10 uncond EDM pretrained",
+        savename="CIFAR_uncond_GMM_lowrank_denoiser_residual_heatmap",);   
+
+
+ 
+
+
 
 
 
 
 #%% Scratch zone 
+#%%
+# sigma = 1.5
+# runname = "CIFAR10 uncond EDM pretrained"
+# norm_scale = LogNorm(vmin=res_mat_pivot_all_sigma[sigma].min().min(), 
+#                     vmax=res_mat_pivot_all_sigma[sigma].min().max())
+# plt.figure(figsize=(10, 8))
+# sns.heatmap(res_mat_pivot_all_sigma[sigma], annot=True, fmt=".2f", 
+#             cmap="YlGnBu", )#norm=norm_scale)
+# plt.title(f"Score EV Residual Matrix of {runname} | sigma=%.2f" % sigma)
+# plt.ylabel("Number of Modes")
+# plt.xlabel("Rank of Mode")
+# # Increase the number of ticks
+# cbar = plt.gca().collections[0].colorbar
+# cbar.locator = MaxNLocator(nbins='auto')  # 'auto' can be replaced with a specific number for more control
+# cbar.update_ticks()
+# # saveallforms(figsumdir, f"MNIST_GMM_rank_residual_heatmap_sigma{sigma}")
+# plt.show()
+
+#%%
 # # import LogNorm
 from matplotlib.colors import LogNorm
 for sigma in [2]:#df_gmm_rk.sigma.unique():
