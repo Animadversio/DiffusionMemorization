@@ -47,7 +47,7 @@ def load_stats(ckptdir, train_root=train_root):
 
 device = 'cuda'
 dataroot = "/n/holylabs/LABS/kempner_fellows/Users/binxuwang/Github/edm/datasets"
-
+tabdir = "/n/home12/binxuwang/Github/DiffusionMemorization/Tables"
 dataset_name = "ffhq"
 train_run_name = "FFHQ_edm_35k"
 ckptname = "00020-ffhq-64x64-uncond-ddpmpp-edm-gpus4-batch256-fp32"
@@ -61,6 +61,17 @@ n_clusters_list = [1, 2, 5, 10, 20, ]
 dataset_name = "cifar10"
 train_run_name = "cifar10_uncond_edm_5k"
 ckptname = "00032-cifar10-32x32-uncond-ddpmpp-edm-gpus4-batch256-fp32"
+n_clusters_list = [1, 2, 5, 10, 20, 50, 100, 200]
+
+dataset_name = "cifar10"
+train_run_name = "cifar10_uncond_edm_Aug_50k"
+ckptname = "00036-cifar10-32x32-uncond-ddpmpp-edm-gpus4-batch256-fp32"
+n_clusters_list = [1, 2, 5, 10, 20, 50, 100, 200]
+
+
+dataset_name = "cifar10"
+train_run_name = "cifar10_uncond_edm_noAug_50k"
+ckptname = "00037-cifar10-32x32-uncond-ddpmpp-edm-gpus4-batch256-fp32"
 n_clusters_list = [1, 2, 5, 10, 20, 50, 100, 200]
 
 batch_size = 256
@@ -191,13 +202,13 @@ for ckpt_idx in trange(ckpt_num):
         
     df_syn = pd.DataFrame(df_col)
     print(f"Updating csv file. {ckpt_idx}th ckpt.")
-    df_syn.to_csv(f"{train_run_name}_epoch_gmm_exp_var_part.csv")
+    df_syn.to_csv(join(tabdir, f"{train_run_name}_epoch_gmm_exp_var_part.csv"))
 
 df_syn = pd.DataFrame(df_col)
 df_syn["St_residual"] = 1 - df_syn["St_EV"]
 df_syn["St_rev_residual"] = 1 - df_syn["St_EV_rev"]
 df_syn["Dt_residual"] = 1 - df_syn["Dt_EV"]
 df_syn["Dt_rev_residual"] = 1 - df_syn["Dt_EV_rev"]
-df_syn.to_csv(f"{train_run_name}_epoch_gmm_exp_var.csv")
+df_syn.to_csv(join(tabdir, f"{train_run_name}_epoch_gmm_exp_var.csv"))
 df_syn.to_csv(join(train_root, ckptname, f"{train_run_name}_epoch_gmm_exp_var.csv"))
 

@@ -1,66 +1,35 @@
 # %%
-
-
-# %%
+from os.path import join
+import sys
 import torch
 import torch.nn.functional as F
 import torchvision
 import torchvision.transforms as transforms
-
-# Define the transformation to apply to the data
-transform = transforms.Compose([
-    transforms.ToTensor(),
-    # transforms.Normalize((0.5,), (0.5,))
-])
-
-# Download and load the MNIST dataset
-train_dataset = torchvision.datasets.MNIST(root='~/Datasets', train=True, transform=transform, download=False)
-test_dataset = torchvision.datasets.MNIST(root='~/Datasets', train=False, transform=transform)
-
-# Create data loaders
-# train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=64, shuffle=True)
-# test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=64, shuffle=False)
+sys.path.append("/n/home12/binxuwang/Github/mini_edm")
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from torchvision.utils import make_grid
+from torchvision.utils import save_image
+from train_edm import edm_sampler, EDM, create_model
+from core.edm_utils import get_default_config, create_edm
+# set pandas display
+pd.set_option('display.max_rows', 500)
+pd.set_option('display.max_columns', 500)
+pd.set_option('display.width', 1000)
 
 
 # %% [markdown]
 # ## EDM vs Analytical Score
 
-# %%
-def load_create_edm(config, model_path):
-    # model_path = f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_75000.pth"
-    unet = create_model(config)
-    edm = EDM(model=unet, cfg=config)
-    checkpoint = torch.load(model_path, map_location=device)
-    # logger.info(f"loaded model: {model_name}")
-    edm.model.load_state_dict(checkpoint)
-    for param in edm.model.parameters():
-        param.requires_grad = False
-    edm.model.eval()
-    return edm
-
-model_path = f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_75000.pth"
-unet = create_model(config)
-edm = EDM(model=unet, cfg=config)
-checkpoint = torch.load(model_path, map_location=device)
-# logger.info(f"loaded model: {model_name}")
-edm.model.load_state_dict(checkpoint)
-for param in edm.model.parameters():
-    param.requires_grad = False
-edm.model.eval();
-
 # %% [markdown]
 # ### Load and Examine the EDM trained model w.r.t. scores
 
-# %%
-import numpy as np
-import matplotlib.pyplot as plt
-from torchvision.utils import make_grid
-from torchvision.utils import save_image
 # %% [markdown]
 # ### Util functions for 2d slicing projection
 
 class CoordSystem:
-    
+    """Define a 2D coordinate system with two basis vectors and an origin."""
     def __init__(self, basis1, basis2, origin=None):
         # Ensure the basis vectors are normalized and orthogonal
         # if origin is None:
@@ -90,11 +59,9 @@ def orthogonal_grid(x1, x2, x3, grid_size):
     # Orthogonalize v with respect to v1 using the Gram-Schmidt process
     proj_v1_v = np.dot(v, v1) / np.dot(v1, v1) * v1
     v2 = v - proj_v1_v
-
     # Step 2: Normalize the Basis Vectors
     v1_normalized = v1 / np.linalg.norm(v1)
     v2_normalized = v2 / np.linalg.norm(v2)
-
     # Step 3: Create the Grid Points
     grid_points = []
     for i in range(grid_size):
@@ -140,28 +107,44 @@ def orthogonal_grid_torch(x1, x2, x3, grid_nums=(10, 10),
             torch.tensor(norm_coords), \
             torch.tensor(plane_coords), coordsys
 
+
+def test_project_numerical(edm_Xmat):
+    if edm_Xmat is None:
+        edm_Xmat = torch.randn(3, 4096).cuda()
+    grid_vecs, norm_coords, plane_coords, coordsys = orthogonal_grid_torch(
+        edm_Xmat[0, :], edm_Xmat[1, :], edm_Xmat[2, :], 
+        grid_nums=(16, 16), x_range=(-0.25, 1.25), y_range=(-0.25, 1.25))
+    # TODO Define test function for the score projection
+    assert torch.allclose(coordsys.ortho_project_vector(grid_vecs) + 
+                coordsys.project_vector(grid_vecs) @ coordsys.basis_matrix, 
+                grid_vecs, atol=1E-5)
+    assert torch.allclose(plane_coords.cuda(), coordsys.project_points(grid_vecs))
+    print("Projection Numerical Test passed")
+
+test_project_numerical(None)
 # %% [markdown]
 # ### Visualization pipeline function
-
-# %%
 from core.analytical_score_lib import mean_isotropic_score, Gaussian_score, delta_GMM_score
 from core.analytical_score_lib import explained_var_vec
 from core.analytical_score_lib import sample_Xt_batch, sample_Xt_batch
 from core.gaussian_mixture_lib import gaussian_mixture_score_batch_sigma_torch, \
     gaussian_mixture_lowrank_score_batch_sigma_torch, compute_cluster
+from core.utils.plot_utils import saveallforms
 
 def score_slice_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape,
-                           sigmas=[0.1, 0.2, 0.5, 1.0, 2.0, 5.0], titlestr="",
-                           grid_nums=(25, 25), x_range=(-0.25, 1.25), y_range=(-0.25, 1.25)):
+                           sigmas=[0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0], titlestr="",
+                           grid_nums=(25, 25), x_range=(-0.25, 1.25), y_range=(-0.25, 1.25),
+                           figsumdir=figsumdir, savestr="", show_image=True,):
     anchors_tsr = torch.stack(anchors)
     grid_vecs, norm_coords, plane_coords, coordsys = orthogonal_grid_torch(
             *anchors, grid_nums=grid_nums, x_range=x_range, y_range=y_range)
-
-    mtg = make_grid(grid_vecs.reshape(-1, *edm_imgshape), nrow=grid_nums[1])
-    plt.figure(figsize=(10, 10))
-    plt.imshow(mtg.permute(1, 2, 0).cpu().numpy())
-    plt.axis('off')
-    plt.show()
+    if show_image:
+        mtg = make_grid(grid_vecs.reshape(-1, *edm_imgshape), nrow=grid_nums[1])
+        plt.figure(figsize=(10, 10))
+        plt.imshow(mtg.permute(1, 2, 0).cpu().numpy())
+        plt.axis('off')
+        saveallforms(figsumdir, f"sample_image_map_{savestr}")
+        plt.show()
     for sigma in sigmas:
         edm_Dt = edm(grid_vecs.view(-1, *edm_imgshape), torch.tensor(sigma), None, use_ema=False).detach()
         score_edm = (edm_Dt.view(grid_vecs.shape) - grid_vecs) / (sigma**2)
@@ -191,14 +174,15 @@ def score_slice_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape,
             axs[i].scatter(anchor_proj[:, 1], anchor_proj[:, 0], color='r', marker='x')
             axs[i].set_aspect('equal')
             axs[i].set_title(name)
-        plt.suptitle(f"score vector field {titlestr}\nsigma={sigma:f}")
+        plt.suptitle(f"score vector field {titlestr}\nsigma={sigma:.2f}")
+        saveallforms(figsumdir, f"score_vector_field_{savestr}_sigma_{sigma}")
         plt.show()
 
 # %%
 def score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="l2",
-                           sigmas=[0.1, 0.2, 0.5, 1.0, 2.0, 5.0], titlestr="",
+                           sigmas=[0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0], titlestr="",
                            grid_nums=(25, 25), x_range=(-0.25, 1.25), y_range=(-0.25, 1.25),
-                           show_image=True):
+                           figsumdir=figsumdir, savestr="", show_image=True,):
     anchors_tsr = torch.stack(anchors)
     grid_vecs, norm_coords, plane_coords, coordsys = orthogonal_grid_torch(
             *anchors, grid_nums=grid_nums, x_range=x_range, y_range=y_range)
@@ -207,6 +191,7 @@ def score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, 
         plt.figure(figsize=(10, 10))
         plt.imshow(mtg.permute(1, 2, 0).cpu().numpy())
         plt.axis('off')
+        saveallforms(figsumdir, f"sample_image_map_{savestr}")
         plt.show()
     for sigma in sigmas:
         edm_Dt = edm(grid_vecs.view(-1, *edm_imgshape), torch.tensor(sigma), None, use_ema=False).detach()
@@ -230,7 +215,6 @@ def score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, 
                             # ("gaussian 2nd expansion", score_gaussian2nd_Xt), 
                             ]):
             # Create a grid for the quiver plot
-            
             anchor_proj = coordsys.project_points(anchors_tsr).cpu().numpy()
             axs[i].invert_yaxis()
             if magnitude == "l2":
@@ -255,20 +239,38 @@ def score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, 
             # cax = divider.append_axes("right", size="5%", pad=0.05)
             cbar = plt.colorbar(im, )
             # cbar.set_clim(0, vec_norm.max())
-        plt.suptitle(f"score vector field {titlestr}\nsigma={sigma:f} magnitude={magnitude}")
+        plt.suptitle(f"score vector field {titlestr}\nsigma={sigma:2f} magnitude={magnitude}")
+        saveallforms(figsumdir, f"score_magnitude_map_{savestr}_{magnitude}_sigma_{sigma}")
         plt.show()
 
-# %%
+#%%
+figroot = "/n/holylabs/LABS/kempner_fellows/Users/binxuwang/DL_Projects/DiffusionHiddenLinear"
+figsumdir = join(figroot, "score_vector_field_vis")
+os.makedirs(figsumdir, exist_ok=True)
+
+#%% Demo model loading 
+import os 
+exproot = "/n/holylfs06/LABS/kempner_fellow_binxuwang/Users/binxuwang/DL_Projects/mini_edm/exps"
+
+# runname_long = "base_mnist_20240129-1406" # 
+# epoch = 499999
+
+runname_long = "base_mnist_20240129-1342" # base_mnist_20240129-1342
+epoch = 999999
+
+# runname_short = "base_mnist_20240130-2207"
+config = get_default_config("mnist")
+edm, _ = create_edm(join(exproot, runname_long, "checkpoints", f"ema_{epoch}.pth"), config, )
+# %% Demo Sample generation 
+seed = 42
+total_steps = 18
 fid_batch_size = 100
 with torch.no_grad():
     noise = torch.randn([fid_batch_size, config.channels, config.img_size, config.img_size],
-                        generator=torch.cuda.manual_seed(config.seed), device=config.device)
-    samples = edm_sampler(edm, noise, num_steps=config.total_steps, use_ema=False).detach().cpu()
+                        generator=torch.cuda.manual_seed(seed), device=config.device)
+    samples = edm_sampler(edm, noise, num_steps=total_steps, use_ema=False).detach().cpu()
     samples.mul_(0.5).add_(0.5)
 samples = torch.clamp(samples, 0., 1.).cpu()
-# samples = np.clip(samples.permute(0, 2, 3, 1).cpu().numpy() * 255., 0, 255).astype(np.uint8)
-# samples = samples.reshape((-1, config.img_size, config.img_size, config.channels))
-# all_samples.append(samples)
 
 plt.figure(figsize=(10, 10))
 plt.imshow((make_grid(samples*255.0, nrow=10).permute(1, 2, 0)).numpy().astype(np.uint8))
@@ -277,8 +279,7 @@ plt.show()
 
 # %% [markdown]
 # ### Load Dataset in EDM convention
-
-# %%
+device = "cuda"
 transform = transforms.Compose([
     torchvision.transforms.Resize(32), # config.img_size
     transforms.ToTensor(),
@@ -290,36 +291,23 @@ test_edm_dataset = torchvision.datasets.MNIST(root='~/Datasets', train=False, tr
 
 edm_Xtsr = torch.stack([train_edm_dataset[i][0] for i in range(len(train_edm_dataset))])
 edm_Xmat = edm_Xtsr.view(edm_Xtsr.shape[0], -1).cuda()
+ytsr = torch.tensor(train_edm_dataset.targets)
 edm_Xtsr_test = torch.stack([test_edm_dataset[i][0] for i in range(len(test_edm_dataset))])
 edm_Xmat_test = edm_Xtsr_test.view(edm_Xtsr_test.shape[0], -1)
 ytsr_test = torch.tensor(test_edm_dataset.targets)
 edm_imgshape = tuple(edm_Xtsr.shape[1:])
 edm_Xmean = edm_Xmat.mean(dim=0)
 edm_Xcov = torch.cov(edm_Xmat.T, )
+edm_std_mean = (torch.trace(edm_Xcov) / edm_Xcov.shape[0]).sqrt()
 
 eigvals, eigvecs = torch.linalg.eigh(edm_Xcov)
 eigvals = torch.flip(eigvals, dims=(0,))
 eigvecs = torch.flip(eigvecs, dims=(1,))
 print(eigvals.shape, eigvecs.shape)
 print(eigvals[0:10].sqrt())
-
+test_project_numerical(edm_Xmat)
 # %% [markdown]
 # ## Visualize learned scores by projection
-
-
-# %%
-# TODO Define test function for the score projection
-torch.allclose(coordsys.ortho_project_vector(grid_vecs) + 
-               coordsys.project_vector(grid_vecs) @ coordsys.basis_matrix, 
-               grid_vecs, atol=1E-5)
-
-# %%
-grid_vecs, norm_coords, plane_coords, coordsys = orthogonal_grid_torch(
-        edm_Xmat[0, :], edm_Xmat[1, :], edm_Xmat[2, :], 
-        grid_nums=(16, 16), x_range=(-0.25, 1.25), y_range=(-0.25, 1.25))
-assert torch.allclose(plane_coords.cuda(), coordsys.project_points(grid_vecs))
-plt.scatter(plane_coords[:, 0], plane_coords[:, 1])
-
 # %%
 # Compute score on the grid points
 grid_vecs, norm_coords, plane_coords, coordsys = orthogonal_grid_torch(
@@ -328,9 +316,181 @@ grid_vecs, norm_coords, plane_coords, coordsys = orthogonal_grid_torch(
 sigma = 0.2
 edm_Dt = edm(grid_vecs.view(-1, *edm_imgshape), torch.tensor(sigma), None, use_ema=False).detach()
 score_edm = (edm_Dt.view(grid_vecs.shape) - grid_vecs) / (sigma**2)
+assert torch.allclose(plane_coords.cuda(), coordsys.project_points(grid_vecs))
+plt.scatter(plane_coords[:, 0], plane_coords[:, 1])
+plt.show()
+
 
 # %% [markdown]
-# ### Demo visualization
+# ## Full visualization pipeline
+# #### Training set, 3 Random samples 
+epoch = 300000
+edm, _ = create_edm(join(exproot, f"base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth"), config)
+knnidx = torch.randint(0, edm_Xmat.shape[0], (1, 3))
+anchors = [edm_Xmat[knnidx[0,0], :], edm_Xmat[knnidx[0,1], :], edm_Xmat[knnidx[0,2], :]]
+titlestr = f"among 3 random samples in TRAIN set, {knnidx[0].cpu()} labels {ytsr[knnidx[0].cpu()].numpy()}"
+savestr = f"ep{epoch//1000}k_train_3rnd_%d_%d_%d" % tuple(knnidx[0].cpu().numpy())
+print("Score vector field", titlestr)
+score_slice_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, 
+                       titlestr=titlestr, savestr=savestr)
+score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="ortho_l2",
+                       titlestr=titlestr, grid_nums=(51, 51), savestr=savestr, show_image=False)
+score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="proj_l2",
+                       titlestr=titlestr, grid_nums=(51, 51), savestr=savestr, show_image=False)
+
+# %% [markdown]
+# #### Training set, nearest neighbors to one point
+epoch = 300000
+edm, _ = create_edm(join(exproot, f"base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth"), config)
+dist2anchor = torch.cdist(edm_Xmat[10:11, :], edm_Xmat)
+knndist, knnidx = torch.topk(dist2anchor, k=3, dim=-1, largest=False)
+anchors = [edm_Xmat[knnidx[0,0], :], edm_Xmat[knnidx[0,1], :], edm_Xmat[knnidx[0,2], :]]
+titlestr = f"among 3 nearest samples in TRAIN set, {knnidx[0].cpu()} labels {ytsr[knnidx[0].cpu()].numpy()}"
+savestr = f"ep{epoch//1000}k_train_3knn_%d_%d_%d" % tuple(knnidx[0].cpu().numpy())
+print("Score vector field", titlestr)
+score_slice_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, 
+                       titlestr=titlestr, savestr=savestr)
+score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="ortho_l2",
+                       titlestr=titlestr, grid_nums=(51, 51), savestr=savestr, show_image=False)
+score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="proj_l2",
+                       titlestr=titlestr, grid_nums=(51, 51), savestr=savestr, show_image=False)
+
+# %% [markdown]
+# #### Test set, nearest neighbors to one point
+epoch = 300000
+edm_Xmat_test = edm_Xmat_test.to(device)
+edm, _ = create_edm(join(exproot, f"base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth"), config)
+dist2anchor = torch.cdist(edm_Xmat_test[12:13, :], edm_Xmat_test)
+knndist, knnidx = torch.topk(dist2anchor, k=3, dim=-1, largest=False)
+anchors = [edm_Xmat_test[knnidx[0,0], :], edm_Xmat_test[knnidx[0,1], :], edm_Xmat_test[knnidx[0,2], :]]
+titlestr = f"among 3 nearest samples in TEST set, {knnidx[0].cpu()} labels {ytsr_test[knnidx[0].cpu()].numpy()}"
+savestr = f"ep{epoch//1000}k_test_3knn_%d_%d_%d" % tuple(knnidx[0].cpu().numpy())
+print("Score vector field", titlestr)
+score_slice_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, 
+                       titlestr=titlestr, savestr=savestr,)
+score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="ortho_l2",
+                       titlestr=titlestr, grid_nums=(51, 51), savestr=savestr, show_image=False)
+score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="proj_l2",
+                       titlestr=titlestr, grid_nums=(51, 51), savestr=savestr, show_image=False)
+
+# %% [markdown]
+# #### Test set: random point samples
+epoch = 300000
+edm_Xmat_test = edm_Xmat_test.to(device)
+edm, _ = create_edm(join(exproot, f"base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth"), config)
+# dist2anchor = torch.cdist(edm_Xmat_test[10:11, :], edm_Xmat_test)
+# knndist, knnidx = torch.topk(dist2anchor, k=3, dim=-1, largest=False)
+# knnidx = torch.randint(edm_Xmat_test.shape[0], (1, 3))
+knnidx = torch.tensor([[8847, 8929, 9063]])
+anchors = [edm_Xmat_test[knnidx[0,0], :], edm_Xmat_test[knnidx[0,1], :], edm_Xmat_test[knnidx[0,2], :]]
+titlestr = f"among 3 random samples in TEST set, {knnidx[0].cpu()} labels {ytsr_test[knnidx[0].cpu()].numpy()}"
+savestr = f"ep{epoch//1000}k_test_3rnd_%d_%d_%d" % tuple(knnidx[0].cpu().numpy())
+print("Score vector field", titlestr)
+score_slice_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, 
+                       titlestr=titlestr, savestr=savestr,)
+score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="ortho_l2",
+                       titlestr=titlestr, grid_nums=(51, 51), savestr=savestr, show_image=False)
+score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="proj_l2",
+                       titlestr=titlestr, grid_nums=(51, 51), savestr=savestr, show_image=False)
+
+# %% Specific Visualization of vector field. 
+
+
+# %% [markdown]
+# #### Off plane component of score vector
+
+# %%
+epoch = 300000
+edm, _ = create_edm(join(exproot,f"base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth"), config)
+knnidx = torch.randint(0, edm_Xmat.shape[0], (1, 3))
+anchors = [edm_Xmat[knnidx[0,0], :], edm_Xmat[knnidx[0,1], :], edm_Xmat[knnidx[0,2], :]]
+titlestr = f"among 3 random samples in TRAIN set, {knnidx[0].cpu()} labels {ytsr[knnidx[0].cpu()].numpy()}"
+print("Score vector field", titlestr)
+score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="proj_l2",
+                       titlestr=titlestr, grid_nums=(51, 51), )
+
+# %%
+epoch = 300000
+edm, _ = create_edm(join(exproot, f"base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth"), config)
+knnidx = torch.randint(0, edm_Xmat.shape[0], (1, 3))
+anchors = [edm_Xmat[knnidx[0,0], :], edm_Xmat[knnidx[0,1], :], edm_Xmat[knnidx[0,2], :]]
+titlestr = f"among 3 random samples in TRAIN set, {knnidx[0].cpu()} labels {ytsr[knnidx[0].cpu()].numpy()}"
+print("Score vector field", titlestr)
+score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="proj_l2",
+                       titlestr=titlestr, grid_nums=(51, 51), )
+
+# %%
+epoch = 300000
+edm, _ = create_edm(join(exproot, f"base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth"), config)
+knnidx = torch.randint(0, edm_Xmat.shape[0], (1, 3))
+anchors = [edm_Xmat[knnidx[0,0], :], edm_Xmat[knnidx[0,1], :], edm_Xmat[knnidx[0,2], :]]
+titlestr = f"among 3 random samples in TRAIN set, {knnidx[0].cpu()} labels {ytsr[knnidx[0].cpu()].numpy()}"
+print("Score vector field", titlestr)
+score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="ortho_l2",
+                       titlestr=titlestr, grid_nums=(51, 51), )
+
+# %%
+epoch = 300000
+edm, _ = create_edm(join(exproot, f"base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth"), config)
+dist2anchor = torch.cdist(edm_Xmat_test[12:13, :], edm_Xmat_test)
+knndist, knnidx = torch.topk(dist2anchor, k=3, dim=-1, largest=False)
+anchors = [edm_Xmat_test[knnidx[0,0], :], edm_Xmat_test[knnidx[0,1], :], edm_Xmat_test[knnidx[0,2], :]]
+titlestr = f"among 3 nearest samples in TEST set, {knnidx[0].cpu()} labels {ytsr_test[knnidx[0].cpu()].numpy()}"
+print("Score vector field", titlestr)
+score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="ortho_l2",
+                       titlestr=titlestr, grid_nums=(51, 51), )
+
+# %%
+epoch = 300000
+edm, _ = create_edm(join(exproot, f"base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth"), config)
+dist2anchor = torch.cdist(edm_Xmat[10:11, :], edm_Xmat)
+knndist, knnidx = torch.topk(dist2anchor, k=3, dim=-1, largest=False)
+anchors = [edm_Xmat[knnidx[0,0], :], edm_Xmat[knnidx[0,1], :], edm_Xmat[knnidx[0,2], :]]
+titlestr = f"among 3 nearest samples in TRAIN set, {knnidx[0].cpu()} labels {ytsr[knnidx[0].cpu()].numpy()}"
+print("Score vector field", titlestr)
+score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="ortho_l2",
+                       titlestr=titlestr, grid_nums=(51, 51), )
+
+#%%
+
+n_clusters_list = [1, 2, 5, 10, 20, 50, 100, 200]
+print("Computing GMM clusters")
+kmeans_batch = 2048
+kmeans_random_seed = 42
+kmeans_verbose = 0
+lambda_EPS = 1E-5
+Us_col = {}
+mus_col = {}
+Lambdas_col = {}
+weights_col = {}
+for n_clusters in reversed(n_clusters_list): #  50, 100, 
+    kmeans, eigval_mat, eigvec_mat, freq_vec, center_mat = compute_cluster(edm_Xmat.cpu(), 
+                            n_clusters=n_clusters,
+                            kmeans_batch=kmeans_batch, 
+                            kmeans_random_seed=kmeans_random_seed,
+                            kmeans_verbose=kmeans_verbose,
+                            lambda_EPS=lambda_EPS)
+    Us_col[n_clusters] = eigvec_mat 
+    mus_col[n_clusters] = center_mat 
+    Lambdas_col[n_clusters] = eigval_mat 
+    weights = freq_vec / freq_vec.sum()
+    weights_col[n_clusters] = weights 
+    print(f"n_clusters={n_clusters}, computed.")
+    
+print("GMM clusters computed.")
+#%%
+# TODO: Functional dictionary for score visualization
+print("Defining score functionals")
+score_func_col = {
+    "mean isotropic": lambda Xt, sigma: mean_isotropic_score(Xt, edm_Xmean, sigma).cpu(), 
+    "mean + std isotropic": lambda Xt, sigma: mean_isotropic_score(Xt, edm_Xmean, sigma, sigma0=edm_std_mean).cpu(), 
+    "gaussian": lambda Xt, sigma: Gaussian_score(Xt, edm_Xmean, edm_Xcov, sigma).cpu(), 
+    "gaussian regularize": lambda Xt, sigma: Gaussian_score(Xt, edm_Xmean, edm_Xcov + torch.eye(edm_Xcov.shape[0]).to(device) * 1E-4, sigma).cpu(), 
+    "gmm delta": lambda Xt, sigma: delta_GMM_score(Xt, edm_Xmat, sigma).cpu(), 
+}
+
+# %% [markdown]
+# ### Demo visualization without functionals 
 
 # %%
 idxs = np.random.choice(edm_Xmat.shape[0], 3, replace=False)
@@ -346,7 +506,7 @@ plt.imshow(mtg.permute(1, 2, 0).cpu().numpy())
 plt.axis('off')
 plt.show()
 epoch = 300000
-edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
+edm, _ = create_edm(join(exproot, "base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth"), config)
 for sigma in [0.1, 0.2, 0.5, 1.0, 2.0, 5.0]:
     edm_Dt = edm(grid_vecs.view(-1, *edm_imgshape), torch.tensor(sigma), None, use_ema=False).detach()
     score_edm = (edm_Dt.view(grid_vecs.shape) - grid_vecs) / (sigma**2)
@@ -393,7 +553,7 @@ plt.imshow(mtg.permute(1, 2, 0).cpu().numpy())
 plt.axis('off')
 plt.show()
 epoch = 300000
-edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
+edm, _ = create_edm(join(exproot, "base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth"), config)
 for sigma in [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 8.0]:
     edm_Dt = edm(grid_vecs.view(-1, *edm_imgshape), torch.tensor(sigma), None, use_ema=False).detach()
     score_edm = (edm_Dt.view(grid_vecs.shape) - grid_vecs) / (sigma**2)
@@ -443,7 +603,7 @@ plt.imshow(mtg.permute(1, 2, 0).cpu().numpy())
 plt.axis('off')
 plt.show()
 epoch = 300000
-edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
+edm, _ = create_edm(join(exproot, "base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth"), config)
 for sigma in [0.1, 0.2, 0.5, 1.0, 2.0, 5.0]:
     edm_Dt = edm(grid_vecs.view(-1, *edm_imgshape), torch.tensor(sigma), None, use_ema=False).detach()
     score_edm = (edm_Dt.view(grid_vecs.shape) - grid_vecs) / (sigma**2)
@@ -476,142 +636,6 @@ for sigma in [0.1, 0.2, 0.5, 1.0, 2.0, 5.0]:
     plt.show()
 
 
-# %%
-epoch = 200000
-edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
-
-
-# %% [markdown]
-# #### Off plane component of score vector
-
-# %%
-epoch = 300000
-edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
-# knnidx = torch.randint(0, edm_Xmat.shape[0], (1, 3))
-anchors = [edm_Xmat[knnidx[0,0], :], edm_Xmat[knnidx[0,1], :], edm_Xmat[knnidx[0,2], :]]
-titlestr = f"among 3 random samples in TRAIN set, {knnidx[0].cpu()} labels {ytsr[knnidx[0].cpu()].numpy()}"
-print("Score vector field", titlestr)
-score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="proj_l2",
-                       titlestr=titlestr, grid_nums=(51, 51), )
-
-# %%
-epoch = 300000
-edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
-# knnidx = torch.randint(0, edm_Xmat.shape[0], (1, 3))
-anchors = [edm_Xmat[knnidx[0,0], :], edm_Xmat[knnidx[0,1], :], edm_Xmat[knnidx[0,2], :]]
-titlestr = f"among 3 random samples in TRAIN set, {knnidx[0].cpu()} labels {ytsr[knnidx[0].cpu()].numpy()}"
-print("Score vector field", titlestr)
-score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="proj_l2",
-                       titlestr=titlestr, grid_nums=(51, 51), )
-
-# %%
-epoch = 300000
-edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
-# knnidx = torch.randint(0, edm_Xmat.shape[0], (1, 3))
-anchors = [edm_Xmat[knnidx[0,0], :], edm_Xmat[knnidx[0,1], :], edm_Xmat[knnidx[0,2], :]]
-titlestr = f"among 3 random samples in TRAIN set, {knnidx[0].cpu()} labels {ytsr[knnidx[0].cpu()].numpy()}"
-print("Score vector field", titlestr)
-score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="ortho_l2",
-                       titlestr=titlestr, grid_nums=(51, 51), )
-
-# %%
-epoch = 300000
-edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
-dist2anchor = torch.cdist(edm_Xmat_test[12:13, :], edm_Xmat_test)
-knndist, knnidx = torch.topk(dist2anchor, k=3, dim=-1, largest=False)
-anchors = [edm_Xmat_test[knnidx[0,0], :], edm_Xmat_test[knnidx[0,1], :], edm_Xmat_test[knnidx[0,2], :]]
-titlestr = f"among 3 nearest samples in TEST set, {knnidx[0].cpu()} labels {ytsr_test[knnidx[0].cpu()].numpy()}"
-print("Score vector field", titlestr)
-score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="ortho_l2",
-                       titlestr=titlestr, grid_nums=(51, 51), )
-
-# %%
-epoch = 300000
-edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
-dist2anchor = torch.cdist(edm_Xmat[10:11, :], edm_Xmat)
-knndist, knnidx = torch.topk(dist2anchor, k=3, dim=-1, largest=False)
-anchors = [edm_Xmat[knnidx[0,0], :], edm_Xmat[knnidx[0,1], :], edm_Xmat[knnidx[0,2], :]]
-titlestr = f"among 3 nearest samples in TRAIN set, {knnidx[0].cpu()} labels {ytsr[knnidx[0].cpu()].numpy()}"
-print("Score vector field", titlestr)
-score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="ortho_l2",
-                       titlestr=titlestr, grid_nums=(51, 51), )
-
-
-# %% [markdown]
-# #### Training set, 3 Random samples 
-
-# %%
-epoch = 300000
-edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
-knnidx = torch.randint(0, edm_Xmat.shape[0], (1, 3))
-anchors = [edm_Xmat[knnidx[0,0], :], edm_Xmat[knnidx[0,1], :], edm_Xmat[knnidx[0,2], :]]
-titlestr = f"among 3 random samples in TRAIN set, {knnidx[0].cpu()} labels {ytsr[knnidx[0].cpu()].numpy()}"
-print("Score vector field", titlestr)
-score_slice_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, 
-                       titlestr=titlestr,)
-score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="ortho_l2",
-                       titlestr=titlestr, grid_nums=(51, 51), show_image=False)
-score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="proj_l2",
-                       titlestr=titlestr, grid_nums=(51, 51), show_image=False)
-
-# %% [markdown]
-# #### Training set, nearest neighbors to one point
-
-# %%
-
-epoch = 300000
-edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
-dist2anchor = torch.cdist(edm_Xmat[10:11, :], edm_Xmat)
-knndist, knnidx = torch.topk(dist2anchor, k=3, dim=-1, largest=False)
-anchors = [edm_Xmat[knnidx[0,0], :], edm_Xmat[knnidx[0,1], :], edm_Xmat[knnidx[0,2], :]]
-titlestr = f"among 3 nearest samples in TRAIN set, {knnidx[0].cpu()} labels {ytsr[knnidx[0].cpu()].numpy()}"
-print("Score vector field", titlestr)
-score_slice_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, 
-                       titlestr=titlestr,)
-score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="ortho_l2",
-                       titlestr=titlestr, grid_nums=(51, 51), show_image=False)
-score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="proj_l2",
-                       titlestr=titlestr, grid_nums=(51, 51), show_image=False)
-
-# %% [markdown]
-# #### Test set, nearest neighbors to one point
-
-# %%
-epoch = 300000
-edm_Xmat_test = edm_Xmat_test.to(device)
-edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
-dist2anchor = torch.cdist(edm_Xmat_test[12:13, :], edm_Xmat_test)
-knndist, knnidx = torch.topk(dist2anchor, k=3, dim=-1, largest=False)
-anchors = [edm_Xmat_test[knnidx[0,0], :], edm_Xmat_test[knnidx[0,1], :], edm_Xmat_test[knnidx[0,2], :]]
-titlestr = f"among 3 nearest samples in TEST set, {knnidx[0].cpu()} labels {ytsr_test[knnidx[0].cpu()].numpy()}"
-print("Score vector field", titlestr)
-score_slice_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, 
-                       titlestr=titlestr,)
-score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="ortho_l2",
-                       titlestr=titlestr, grid_nums=(51, 51), show_image=False)
-score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="proj_l2",
-                       titlestr=titlestr, grid_nums=(51, 51), show_image=False)
-
-# %% [markdown]
-# #### Test set: random point samples
-
-# %%
-epoch = 300000
-edm_Xmat_test = edm_Xmat_test.to(device)
-edm = load_create_edm(config, f"/n/home12/binxuwang/Github/mini_edm/exps/base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth")
-# dist2anchor = torch.cdist(edm_Xmat_test[10:11, :], edm_Xmat_test)
-# knndist, knnidx = torch.topk(dist2anchor, k=3, dim=-1, largest=False)
-# knnidx = torch.randint(edm_Xmat_test.shape[0], (1, 3))
-knnidx = torch.tensor([[8847, 8929, 9063]])
-anchors = [edm_Xmat_test[knnidx[0,0], :], edm_Xmat_test[knnidx[0,1], :], edm_Xmat_test[knnidx[0,2], :]]
-titlestr = f"among 3 random samples in TEST set, {knnidx[0].cpu()} labels {ytsr_test[knnidx[0].cpu()].numpy()}"
-print("Score vector field", titlestr)
-score_slice_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, 
-                       titlestr=titlestr,)
-score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="ortho_l2",
-                       titlestr=titlestr, grid_nums=(51, 51), show_image=False)
-score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="proj_l2",
-                       titlestr=titlestr, grid_nums=(51, 51), show_image=False)
 
 # %% [markdown]
 # ### Combined Vector field comparison
