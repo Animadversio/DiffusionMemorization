@@ -10,7 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from torchvision.utils import make_grid, save_image
-from core.gmm_special_dynamics import alpha
+# from core.gmm_special_dynamics import alpha
 sys.path.append("/n/home12/binxuwang/Github/mini_edm")
 sys.path.append("/n/home12/binxuwang/Github/DiffusionMemorization")
 # from train_edm import edm_sampler, EDM, create_model
@@ -26,11 +26,16 @@ figroot = "/n/holylabs/LABS/kempner_fellows/Users/binxuwang/DL_Projects/Diffusio
 figsumdir = join(figroot, "GMM_EDM_training_summary")
 os.makedirs(figsumdir, exist_ok=True)
 #%%
+from matplotlib.ticker import ScalarFormatter
+epochfmt = ScalarFormatter()
+epochfmt.set_powerlimits((-3,4))  # Or whatever your limits are . . .
 def visualize_train_run_score_cmp(df_syn, plot_var="St_residual", palette="turbo", 
              hue_order=["mean isotropic", "gaussian", "gmm_2_mode", "gmm_5_mode", 
                         "gmm_10_mode", "gmm_20_mode", "gmm_50_mode", "gmm_100_mode", "gmm delta"], 
-                        train_run_name="CIFAR10 EDM 5k epochs initial", 
-                        savename="cifar10_mini_edm_gmm_score_residual_ev_initial_epochs"):
+             sigmas=[1.0e-02, 5.0e-02, 1.0e-01, 5.0e-01, 1.0e+00, 1.5e+00, 2.0e+00, 5.0e+00, 1.0e+01, 2.0e+01, ],
+             figsize=(22.5, 8), nrowcols=(2, 5), 
+            train_run_name="CIFAR10 EDM 5k epochs initial", 
+            savename="cifar10_mini_edm_gmm_score_residual_ev_initial_epochs"):
     
     if plot_var == "St_residual":
         cmp_variable = "score"
@@ -38,21 +43,24 @@ def visualize_train_run_score_cmp(df_syn, plot_var="St_residual", palette="turbo
         cmp_variable = "denoiser"
     else:
         cmp_variable = plot_var
-    nrow, ncol = 2, 5
-    figh, axs = plt.subplots(nrow, ncol, figsize=(22.5, 8))
+    nrow, ncol = nrowcols
+    figh, axs = plt.subplots(nrow, ncol, figsize=figsize)
     axs = axs.flatten()
-    for i, sigma in enumerate([1.0e-02, 5.0e-02, 1.0e-01, 5.0e-01, 1.0e+00, 1.5e+00, 2.0e+00, 5.0e+00, 1.0e+01, 2.0e+01, ]):
+    for i, sigma in enumerate(sigmas):
         df_syn_sigma = df_syn[(df_syn.sigma == sigma)]
         sns.lineplot(data=df_syn_sigma, x="epoch", y=plot_var, hue="name", 
                     hue_order=hue_order, palette=palette, ax=axs[i], 
                     marker="o", markersize=3, lw=2.0, alpha=0.7)
         axs[i].set_yscale("log")
         axs[i].set_ylim(None, 1)
-        axs[i].set_ylabel(f"{cmp_variable} residual EV", fontsize=14)
-        axs[i].set_xlabel(f"epoch", fontsize=14)
-        axs[i].tick_params(axis='x', labelsize=14)
-        axs[i].tick_params(axis='y', labelsize=14)
-        axs[i].set_title(f"sigma={sigma}", fontsize=16)
+        axs[i].set_ylabel(f"{cmp_variable} residual EV", fontsize=18)
+        axs[i].set_xlabel(f"epoch", fontsize=18)
+        axs[i].tick_params(axis='both', which='major', labelsize=18)
+        axs[i].tick_params(axis='both', which='minor', labelsize=16)
+        axs[i].xaxis.set_major_formatter(epochfmt)
+        axs[i].get_xaxis().get_offset_text().set_size(16)
+        axs[i].get_yaxis().get_offset_text().set_size(16)
+        axs[i].set_title(f"sigma={sigma}", fontsize=20, y=0.94)
         # remove ylabel when not at the leftmost column
         if i % ncol != 0:
             axs[i].set_ylabel(None)
@@ -64,10 +72,11 @@ def visualize_train_run_score_cmp(df_syn, plot_var="St_residual", palette="turbo
             axs[i].legend().remove()
         else:
             # move the legend to outside of the plot
-            axs[i].legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=14,
-                          title="Score approximation", title_fontsize=14)
-    plt.suptitle(f"Residual explained variance of EDM {cmp_variable} by Gaussian and GMM {cmp_variable}s ({train_run_name})", fontsize=20)
-    plt.tight_layout()
+            axs[i].legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=16,
+                          title="Score approximation", title_fontsize=18)
+    plt.suptitle(f"Residual explained variance of EDM {cmp_variable} by Gaussian and GMM {cmp_variable}s ({train_run_name})", fontsize=24)
+    plt.subplots_adjust(left=None, bottom=None, right=None, top=None, wspace=None, hspace=None)
+    # plt.tight_layout()
     saveallforms(figsumdir, savename, figh, ["pdf", "png"])
     plt.show()
     return figh, axs
