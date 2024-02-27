@@ -1,4 +1,6 @@
-# %%
+# %% [markdown]
+# ## EDM vs Analytical Score
+import os 
 from os.path import join
 import sys
 import torch
@@ -17,11 +19,6 @@ from core.edm_utils import get_default_config, create_edm
 pd.set_option('display.max_rows', 500)
 pd.set_option('display.max_columns', 500)
 pd.set_option('display.width', 1000)
-
-
-# %% [markdown]
-# ## EDM vs Analytical Score
-
 # %% [markdown]
 # ### Load and Examine the EDM trained model w.r.t. scores
 
@@ -38,18 +35,20 @@ class CoordSystem:
         self.basis1 = basis1 / torch.norm(basis1)
         self.basis2 = basis2 / torch.norm(basis2)
         self.basis_matrix = torch.stack([self.basis1, self.basis2], dim=0)
-
+        self.device = self.basis_matrix.device
+        
     def project_vector(self, vectors):
         # Project a vector onto the basis using matrix algebra
-        return (vectors @ self.basis_matrix.T)
+        return (vectors.to(self.device) @ self.basis_matrix.to(vectors.dtype).T)
 
     def ortho_project_vector(self, vectors):
         # Project a vector onto the perpendicular space of the basis using matrix algebra
-        return vectors - (vectors @ self.basis_matrix.to(vectors.dtype).T) @ self.basis_matrix.to(vectors.dtype)
+        return vectors.to(self.device) - (vectors.to(self.device) @ self.basis_matrix.to(vectors.dtype).T) @ self.basis_matrix.to(vectors.dtype)
     
     def project_points(self, points):
         # Project a set of points onto the basis
-        return (points - self.reference) @ self.basis_matrix.T
+        return (points.to(self.device) - self.reference.to(points.dtype)) @ self.basis_matrix.to(points.dtype).T
+    #TODO: make the casting more elegant
 
 
 def orthogonal_grid(x1, x2, x3, grid_size):
@@ -243,15 +242,129 @@ def score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, 
         saveallforms(figsumdir, f"score_magnitude_map_{savestr}_{magnitude}_sigma_{sigma}")
         plt.show()
 
+
+#%% [markdown]
+# ## More flexible functional interface to plot arbitrary score function
+def score_slice_projection_functional(anchors, edm, score_func_col, score_name2plot, edm_imgshape,
+                           sigmas=[0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0], titlestr="",
+                           grid_nums=(25, 25), x_range=(-0.25, 1.25), y_range=(-0.25, 1.25),
+                           figsize=(20, 5), nrowcols=(1, 4), savefig=True, colorvector=True,
+                           figsumdir=figsumdir, savestr="", show_image=True,):
+    anchors_tsr = torch.stack(anchors)
+    grid_vecs, norm_coords, plane_coords, coordsys = orthogonal_grid_torch(
+            *anchors, grid_nums=grid_nums, x_range=x_range, y_range=y_range)
+    if show_image:
+        mtg = make_grid(grid_vecs.reshape(-1, *edm_imgshape), nrow=grid_nums[1])
+        plt.figure(figsize=(10, 10))
+        plt.imshow(mtg.permute(1, 2, 0).cpu().numpy())
+        plt.axis('off')
+        if savefig: saveallforms(figsumdir, f"sample_image_map_{savestr}")
+        plt.show()
+    for sigma in sigmas:
+        edm_Dt = edm(grid_vecs.view(-1, *edm_imgshape), torch.tensor(sigma), None, use_ema=False).detach()
+        score_edm = (edm_Dt.view(grid_vecs.shape) - grid_vecs) / (sigma**2)
+        # Calculate the vector field
+        score_vec_col = {}
+        score_vec_col["edm NN"] = score_edm
+        for score_name in score_name2plot:
+            score_func = score_func_col[score_name]
+            score_vec_col[score_name] = score_func(grid_vecs, sigma)
+        
+        nrow, ncol = nrowcols
+        fig, axs = plt.subplots(nrow, ncol, figsize=figsize, sharex=True, sharey=True)
+        axs = axs.flatten()
+        for i, (name, vector_field) in enumerate(score_vec_col.items()):
+            # Create a grid for the quiver plot
+            vec_proj = coordsys.project_vector(vector_field).cpu().numpy()
+            anchor_proj = coordsys.project_points(anchors_tsr).cpu().numpy()
+            vec_magn = np.sqrt((vec_proj ** 2).sum(axis=-1))
+            # axs[i].invert_yaxis()
+            # show the magnitude of the vector field
+            im = axs[i].imshow(vec_magn.reshape(grid_nums), origin="lower", 
+                          extent=[plane_coords[:, 1].min(), plane_coords[:, 1].max(), 
+                                  plane_coords[:, 0].min(), plane_coords[:, 0].max(), ],
+                          vmin=0, vmax=vec_magn.max())
+            axs[i].quiver(plane_coords[:, 1], plane_coords[:, 0], vec_proj[:, 1], vec_proj[:, 0], 
+                          color="white", cmap='viridis_r',
+                          angles='xy')
+            axs[i].scatter(anchor_proj[:, 1], anchor_proj[:, 0], color='r', marker='x')
+            axs[i].invert_yaxis()
+            axs[i].set_aspect('equal')
+            axs[i].set_title(name, fontsize=15)
+        plt.suptitle(f"score vector field {titlestr}\nsigma={sigma:.2f}", fontsize=18)
+        # reduce the margin and padding to None 
+        # plt.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
+        plt.subplots_adjust(left=None, bottom=None, right=None, top=None, wspace=None, hspace=None)
+        # plt.tight_layout()
+        if savefig: saveallforms(figsumdir, f"score_vector_field_{savestr}_sigma_{sigma}")
+        plt.show()
+
+
+def score_magnitude_projection_functional(anchors, edm, score_func_col, score_name2plot, edm_imgshape, magnitude="l2",
+                           sigmas=[0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0], titlestr="",
+                           grid_nums=(25, 25), x_range=(-0.25, 1.25), y_range=(-0.25, 1.25),
+                           figsize=(20, 5), nrowcols=(1, 4), savefig=True,
+                           figsumdir=figsumdir, savestr="", show_image=True,):
+    anchors_tsr = torch.stack(anchors)
+    grid_vecs, norm_coords, plane_coords, coordsys = orthogonal_grid_torch(
+            *anchors, grid_nums=grid_nums, x_range=x_range, y_range=y_range)
+    if show_image:
+        mtg = make_grid(grid_vecs.reshape(-1, *edm_imgshape), nrow=grid_nums[1])
+        plt.figure(figsize=(10, 10))
+        plt.imshow(mtg.permute(1, 2, 0).cpu().numpy())
+        plt.axis('off')
+        if savefig: saveallforms(figsumdir, f"sample_image_map_{savestr}")
+        plt.show()
+    for sigma in sigmas:
+        edm_Dt = edm(grid_vecs.view(-1, *edm_imgshape), torch.tensor(sigma), None, use_ema=False).detach()
+        score_edm = (edm_Dt.view(grid_vecs.shape) - grid_vecs) / (sigma**2)
+        score_vec_col = {}
+        score_vec_col["edm NN"] = score_edm
+        for score_name in score_name2plot:
+            score_func = score_func_col[score_name]
+            score_vec_col[score_name] = score_func(grid_vecs, sigma)
+        # Calculate the vector field
+        nrow, ncol = nrowcols
+        fig, axs = plt.subplots(nrow, ncol, figsize=figsize, sharex=True, sharey=True)
+        axs = axs.flatten()
+        for i, (name, vector_field) in enumerate(score_vec_col.items()):# Calculate the vector field
+            # Create a grid for the quiver plot
+            anchor_proj = coordsys.project_points(anchors_tsr).cpu().numpy()
+            axs[i].invert_yaxis()
+            if magnitude == "l2":
+                vec_norm = torch.norm(vector_field, dim=-1).cpu().numpy()
+            elif magnitude == "proj_l2":
+                vec_proj = coordsys.project_vector(vector_field)
+                vec_norm = torch.norm(vec_proj, dim=-1).cpu().numpy()
+            elif magnitude == "ortho_l2":
+                vec_ortho = coordsys.ortho_project_vector(vector_field.double())
+                vec_norm = torch.norm(vec_ortho, dim=-1).cpu().numpy()
+            # axs[i].quiver(plane_coords[:, 1], plane_coords[:, 0], vec_proj[:, 1], vec_proj[:, 0], angles='xy')
+            im = axs[i].imshow(vec_norm.reshape(grid_nums), origin="lower", 
+                          extent=[plane_coords[:, 1].min(), plane_coords[:, 1].max(), 
+                                  plane_coords[:, 0].min(), plane_coords[:, 0].max(), ],
+                          vmin=0, vmax=vec_norm.max())
+            axs[i].scatter(anchor_proj[:, 1], anchor_proj[:, 0], color='r', marker='x')
+            axs[i].invert_yaxis()
+            axs[i].set_aspect('equal')
+            axs[i].set_title(name, fontsize=15)
+            # add colorbar
+            # divider = make_axes_locatable(axs[i])
+            # cax = divider.append_axes("right", size="5%", pad=0.05)
+            cbar = plt.colorbar(im, )
+            # cbar.set_clim(0, vec_norm.max())
+        plt.suptitle(f"score vector field {titlestr}\nsigma={sigma:2f} magnitude={magnitude}", fontsize=18)
+        plt.subplots_adjust(left=None, bottom=None, right=None, top=None, wspace=None, hspace=None)
+        # plt.tight_layout()
+        if savefig: saveallforms(figsumdir, f"score_magnitude_map_{savestr}_{magnitude}_sigma_{sigma}")
+        plt.show()
 #%%
 figroot = "/n/holylabs/LABS/kempner_fellows/Users/binxuwang/DL_Projects/DiffusionHiddenLinear"
 figsumdir = join(figroot, "score_vector_field_vis")
 os.makedirs(figsumdir, exist_ok=True)
 
 #%% Demo model loading 
-import os 
 exproot = "/n/holylfs06/LABS/kempner_fellow_binxuwang/Users/binxuwang/DL_Projects/mini_edm/exps"
-
 # runname_long = "base_mnist_20240129-1406" # 
 # epoch = 499999
 
@@ -293,7 +406,7 @@ edm_Xtsr = torch.stack([train_edm_dataset[i][0] for i in range(len(train_edm_dat
 edm_Xmat = edm_Xtsr.view(edm_Xtsr.shape[0], -1).cuda()
 ytsr = torch.tensor(train_edm_dataset.targets)
 edm_Xtsr_test = torch.stack([test_edm_dataset[i][0] for i in range(len(test_edm_dataset))])
-edm_Xmat_test = edm_Xtsr_test.view(edm_Xtsr_test.shape[0], -1)
+edm_Xmat_test = edm_Xtsr_test.view(edm_Xtsr_test.shape[0], -1).cuda()
 ytsr_test = torch.tensor(test_edm_dataset.targets)
 edm_imgshape = tuple(edm_Xtsr.shape[1:])
 edm_Xmean = edm_Xmat.mean(dim=0)
@@ -320,6 +433,163 @@ assert torch.allclose(plane_coords.cuda(), coordsys.project_points(grid_vecs))
 plt.scatter(plane_coords[:, 0], plane_coords[:, 1])
 plt.show()
 
+#%% Compute GMM clusters
+
+n_clusters_list = [1, 2, 5, 10, 20, 50, 100] # 50, 100, 200, 500, 1000
+print("Computing GMM clusters")
+kmeans_batch = 2048
+kmeans_random_seed = 42
+kmeans_verbose = 0
+lambda_EPS = 1E-5
+Us_col = {}
+mus_col = {}
+Lambdas_col = {}
+weights_col = {}
+for n_clusters in reversed(n_clusters_list): #  50, 100, 
+    kmeans, eigval_mat, eigvec_mat, freq_vec, center_mat = compute_cluster(edm_Xmat.cpu(), 
+                            n_clusters=n_clusters,
+                            kmeans_batch=kmeans_batch, 
+                            kmeans_random_seed=kmeans_random_seed,
+                            kmeans_verbose=kmeans_verbose,
+                            lambda_EPS=lambda_EPS)
+    Us_col[n_clusters] = eigvec_mat 
+    mus_col[n_clusters] = center_mat 
+    Lambdas_col[n_clusters] = eigval_mat 
+    weights = freq_vec / freq_vec.sum()
+    weights_col[n_clusters] = weights 
+    print(f"n_clusters={n_clusters}, computed.")
+    
+print("GMM clusters computed.")
+
+#%%
+# TODO: Functional dictionary for score visualization
+print("Defining score functionals")
+score_func_col = {
+    "mean isotropic": lambda Xt, sigma: mean_isotropic_score(Xt, edm_Xmean, sigma).cpu(), 
+    "mean + std isotropic": lambda Xt, sigma: mean_isotropic_score(Xt, edm_Xmean, sigma, sigma0=edm_std_mean).cpu(), 
+    "gaussian": lambda Xt, sigma: Gaussian_score(Xt, edm_Xmean, edm_Xcov, sigma).cpu(), 
+    "gaussian regularize": lambda Xt, sigma: Gaussian_score(Xt, edm_Xmean, edm_Xcov + torch.eye(edm_Xcov.shape[0]).to(device) * 1E-4, sigma).cpu(), 
+    "gmm delta": lambda Xt, sigma: delta_GMM_score(Xt, edm_Xmat, sigma).cpu(), 
+}
+# note the lambda function is tricky. 
+# The default value of the function argument is evaluated at the time of the function definition, 
+# not at the time of the function call. DO Not remove the nc argument in the lambda function. or all will be the same.
+for n_clusters in n_clusters_list:
+    score_func_col[f"gmm_{n_clusters}_mode"] = lambda Xt, sigma, nc=n_clusters: \
+        gaussian_mixture_score_batch_sigma_torch(Xt, mus_col[nc].cuda(),
+                Us_col[nc].cuda(), Lambdas_col[nc].cuda()+ sigma**2, weights_col[nc].cuda(), ).cpu()
+# score_func_col["gmm_5_mode"] = lambda Xt, sigma: \
+#     gaussian_mixture_score_batch_sigma_torch(Xt, mus_col[5].cuda(),
+#             Us_col[5].cuda(), Lambdas_col[5].cuda()+ sigma**2, weights_col[5].cuda(), ).cpu()
+# score_func_col["gmm_10_mode"] = lambda Xt, sigma: \
+#     gaussian_mixture_score_batch_sigma_torch(Xt, mus_col[10].cuda(),
+#             Us_col[10].cuda(), Lambdas_col[10].cuda()+ sigma**2, weights_col[10].cuda(), ).cpu()
+# score_func_col["gmm_20_mode"] = lambda Xt, sigma: \
+#     gaussian_mixture_score_batch_sigma_torch(Xt, mus_col[20].cuda(),
+#             Us_col[20].cuda(), Lambdas_col[20].cuda()+ sigma**2, weights_col[20].cuda(), ).cpu()
+# gaussian_mixture_score_batch_sigma_torch(Xt, 
+#                 mus_col[n_clusters].cuda(), Us_col[n_clusters].cuda(), Lambdas_col[n_clusters].cuda() + sigma**2, 
+#                 weights=weights_col[n_clusters].cuda()).cpu()
+#%%
+def edm_score_func(Xt, sigma, edm):
+    edm_Dt = edm(Xt.view(-1, *edm_imgshape), torch.tensor(sigma), None, use_ema=False).detach()
+    score_edm = (edm_Dt.view(grid_vecs.shape) - Xt) / (sigma**2)
+    return score_edm
+#%%
+def sample_X_with_same_y(ytsr, y=None, size=(1, 3)):
+    if y is None:
+        y = torch.randint(0, 10, (1,)).item()
+    # return RANDOM row idx in edm_Xmat with label y with size
+    idx = torch.where(ytsr == y)[0]
+    idx = idx[torch.randint(0, len(idx), size)]
+    return idx
+
+def sample_X_with_diff_y(ytsr, ys=None, size=3):
+    if ys is None:
+        # sample three different labels without replacement
+        # y = torch.randint(0, 10, (1, 3))
+        ys = torch.randperm(10)[:size]
+    # return RANDOM row idx in edm_Xmat with label y with size
+    idxs = []
+    for y in ys:
+        idx = torch.where(ytsr == y)[0]
+        idx = idx[torch.randint(0, len(idx), (1,))]
+        idxs.append(idx)
+    idxs = torch.cat(idxs, dim=0)[None,]
+    return idxs
+#%% [markdown]
+# ## Final Visualization Export 
+epoch = 999999##300000
+edm, _ = create_edm(join(exproot, f"base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth"), config)
+#%%
+sigmas = [0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0]
+score_name2plot = ["gmm delta", "gmm_100_mode", "gmm_50_mode", "gmm_20_mode", "gmm_10_mode", "gmm_5_mode", "gmm_2_mode", "gaussian", "mean isotropic", ]
+plot_kwargs = dict(nrowcols=(2, 5), 
+                   figsize=(20, 7.5),
+                   show_image=True, 
+                   savefig=True,
+                   figsumdir=figsumdir, )
+#%% [markdown] 
+# ### Different class training set samples 
+# knnidx = torch.randint(0, edm_Xmat.shape[0], (1, 3))
+# knnidx = torch.tensor([[41890, 35786, 23163]])
+knnidx = sample_X_with_diff_y(ytsr, size=3)
+knnidx = torch.tensor([[17960, 10172,   762]])
+anchors = [edm_Xmat[knnidx[0,0], :], edm_Xmat[knnidx[0,1], :], edm_Xmat[knnidx[0,2], :]]
+titlestr = f"among 3 random samples in TRAIN set, {knnidx[0].cpu().numpy()} labels {ytsr[knnidx[0]].cpu().numpy()}"
+savestr = f"ep{round(epoch/1000)}k_train_3rnd_%d_%d_%d_GMM" % tuple(knnidx[0].cpu().numpy())
+# sigmas = [0.05, 0.5, 5, 20, 50]#[0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
+score_slice_projection_functional(anchors, edm, score_func_col, score_name2plot, edm_imgshape,
+        sigmas=sigmas, titlestr=titlestr, savestr=savestr,**plot_kwargs)
+
+#%% [markdown] 
+# ### Same class training set samples 
+knnidx = sample_X_with_same_y(ytsr, y=5, size=(1, 3))
+knnidx = torch.tensor([[57814, 27510, 32870]])
+anchors = [edm_Xmat[knnidx[0,0], :], edm_Xmat[knnidx[0,1], :], edm_Xmat[knnidx[0,2], :]]
+titlestr = f"among 3 samples with same class in TRAIN set, {knnidx[0].cpu().numpy()} labels {ytsr[knnidx[0]].cpu().numpy()}"
+savestr = f"ep{round(epoch/1000)}k_train_3samecls_%d_%d_%d_GMM" % tuple(knnidx[0].cpu().numpy())
+# sigmas = [0.05, 0.5, 5, 20, 50]#[0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
+score_slice_projection_functional(anchors, edm, score_func_col, score_name2plot, edm_imgshape,
+        sigmas=sigmas, titlestr=titlestr, savestr=savestr,**plot_kwargs)
+
+#%% [markdown]
+# ### Different class test set samples 
+# knnidx = torch.randint(0, edm_Xmat_test.shape[0], (1, 3))
+knnidx = sample_X_with_diff_y(ytsr_test, size=3)
+knnidx = torch.tensor([[5937, 7460, 7785]])
+anchors = [edm_Xmat_test[knnidx[0,0], :], edm_Xmat_test[knnidx[0,1], :], edm_Xmat_test[knnidx[0,2], :]]
+titlestr = f"among 3 random samples in TEST set, {knnidx[0].cpu().numpy()} labels {ytsr_test[knnidx[0]].cpu().numpy()}"
+savestr = f"ep{round(epoch/1000)}k_test_3rnd_%d_%d_%d_GMM" % tuple(knnidx[0].cpu().numpy())
+# sigmas = [0.05, 0.5, 5, 20, 50]#[0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0]
+score_slice_projection_functional(anchors, edm, score_func_col, score_name2plot, edm_imgshape,
+        sigmas=sigmas, titlestr=titlestr, savestr=savestr, **plot_kwargs)
+
+#%% [markdown]
+# ### Same class test set samples 
+knnidx = sample_X_with_same_y(ytsr_test, y=2, size=(1, 3))
+knnidx = torch.tensor([[3658, 4066, 8719]])
+anchors = [edm_Xmat_test[knnidx[0,0], :], edm_Xmat_test[knnidx[0,1], :], edm_Xmat_test[knnidx[0,2], :]]
+titlestr = f"among 3 samples with same class in TEST set, {knnidx[0].cpu().numpy()} labels {ytsr_test[knnidx[0]].cpu().numpy()}"
+savestr = f"ep{round(epoch/1000)}k_test_3samecls_%d_%d_%d_GMM" % tuple(knnidx[0].cpu().numpy())
+# sigmas = [0.05, 0.5, 5, 20, 50]#[0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
+score_slice_projection_functional(anchors, edm, score_func_col, score_name2plot, edm_imgshape,
+        sigmas=sigmas, titlestr=titlestr, savestr=savestr, **plot_kwargs)
+
+
+
+
+
+#%% [markdown]
+# learning process of scores 
+
+
+
+
+
+
+
+
 
 # %% [markdown]
 # ## Full visualization pipeline
@@ -329,7 +599,7 @@ edm, _ = create_edm(join(exproot, f"base_mnist_20240129-1342/checkpoints/ema_{ep
 knnidx = torch.randint(0, edm_Xmat.shape[0], (1, 3))
 anchors = [edm_Xmat[knnidx[0,0], :], edm_Xmat[knnidx[0,1], :], edm_Xmat[knnidx[0,2], :]]
 titlestr = f"among 3 random samples in TRAIN set, {knnidx[0].cpu()} labels {ytsr[knnidx[0].cpu()].numpy()}"
-savestr = f"ep{epoch//1000}k_train_3rnd_%d_%d_%d" % tuple(knnidx[0].cpu().numpy())
+savestr = f"ep{round(epoch/1000)}k_train_3rnd_%d_%d_%d" % tuple(knnidx[0].cpu().numpy())
 print("Score vector field", titlestr)
 score_slice_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, 
                        titlestr=titlestr, savestr=savestr)
@@ -346,7 +616,7 @@ dist2anchor = torch.cdist(edm_Xmat[10:11, :], edm_Xmat)
 knndist, knnidx = torch.topk(dist2anchor, k=3, dim=-1, largest=False)
 anchors = [edm_Xmat[knnidx[0,0], :], edm_Xmat[knnidx[0,1], :], edm_Xmat[knnidx[0,2], :]]
 titlestr = f"among 3 nearest samples in TRAIN set, {knnidx[0].cpu()} labels {ytsr[knnidx[0].cpu()].numpy()}"
-savestr = f"ep{epoch//1000}k_train_3knn_%d_%d_%d" % tuple(knnidx[0].cpu().numpy())
+savestr = f"ep{round(epoch/1000)}k_train_3knn_%d_%d_%d" % tuple(knnidx[0].cpu().numpy())
 print("Score vector field", titlestr)
 score_slice_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, 
                        titlestr=titlestr, savestr=savestr)
@@ -364,7 +634,7 @@ dist2anchor = torch.cdist(edm_Xmat_test[12:13, :], edm_Xmat_test)
 knndist, knnidx = torch.topk(dist2anchor, k=3, dim=-1, largest=False)
 anchors = [edm_Xmat_test[knnidx[0,0], :], edm_Xmat_test[knnidx[0,1], :], edm_Xmat_test[knnidx[0,2], :]]
 titlestr = f"among 3 nearest samples in TEST set, {knnidx[0].cpu()} labels {ytsr_test[knnidx[0].cpu()].numpy()}"
-savestr = f"ep{epoch//1000}k_test_3knn_%d_%d_%d" % tuple(knnidx[0].cpu().numpy())
+savestr = f"ep{round(epoch/1000)}k_test_3knn_%d_%d_%d" % tuple(knnidx[0].cpu().numpy())
 print("Score vector field", titlestr)
 score_slice_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, 
                        titlestr=titlestr, savestr=savestr,)
@@ -384,7 +654,7 @@ edm, _ = create_edm(join(exproot, f"base_mnist_20240129-1342/checkpoints/ema_{ep
 knnidx = torch.tensor([[8847, 8929, 9063]])
 anchors = [edm_Xmat_test[knnidx[0,0], :], edm_Xmat_test[knnidx[0,1], :], edm_Xmat_test[knnidx[0,2], :]]
 titlestr = f"among 3 random samples in TEST set, {knnidx[0].cpu()} labels {ytsr_test[knnidx[0].cpu()].numpy()}"
-savestr = f"ep{epoch//1000}k_test_3rnd_%d_%d_%d" % tuple(knnidx[0].cpu().numpy())
+savestr = f"ep{round(epoch/1000)}k_test_3rnd_%d_%d_%d" % tuple(knnidx[0].cpu().numpy())
 print("Score vector field", titlestr)
 score_slice_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, 
                        titlestr=titlestr, savestr=savestr,)
@@ -394,6 +664,11 @@ score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magn
                        titlestr=titlestr, grid_nums=(51, 51), savestr=savestr, show_image=False)
 
 # %% Specific Visualization of vector field. 
+
+
+
+
+
 
 
 # %% [markdown]
@@ -451,43 +726,55 @@ print("Score vector field", titlestr)
 score_magnitude_projection(anchors, edm, edm_Xmean, edm_Xcov, edm_imgshape, magnitude="ortho_l2",
                        titlestr=titlestr, grid_nums=(51, 51), )
 
+
+
 #%%
 
-n_clusters_list = [1, 2, 5, 10, 20, 50, 100, 200]
-print("Computing GMM clusters")
-kmeans_batch = 2048
-kmeans_random_seed = 42
-kmeans_verbose = 0
-lambda_EPS = 1E-5
-Us_col = {}
-mus_col = {}
-Lambdas_col = {}
-weights_col = {}
-for n_clusters in reversed(n_clusters_list): #  50, 100, 
-    kmeans, eigval_mat, eigvec_mat, freq_vec, center_mat = compute_cluster(edm_Xmat.cpu(), 
-                            n_clusters=n_clusters,
-                            kmeans_batch=kmeans_batch, 
-                            kmeans_random_seed=kmeans_random_seed,
-                            kmeans_verbose=kmeans_verbose,
-                            lambda_EPS=lambda_EPS)
-    Us_col[n_clusters] = eigvec_mat 
-    mus_col[n_clusters] = center_mat 
-    Lambdas_col[n_clusters] = eigval_mat 
-    weights = freq_vec / freq_vec.sum()
-    weights_col[n_clusters] = weights 
-    print(f"n_clusters={n_clusters}, computed.")
-    
-print("GMM clusters computed.")
+#%% Functional visualization of GMM comparison 
+
+epoch = 300000
+edm, _ = create_edm(join(exproot, f"base_mnist_20240129-1342/checkpoints/ema_{epoch}.pth"), config)
+knnidx = torch.randint(0, edm_Xmat.shape[0], (1, 3))
+# knnidx = torch.tensor([[41890, 35786, 23163]])
+anchors = [edm_Xmat[knnidx[0,0], :], edm_Xmat[knnidx[0,1], :], edm_Xmat[knnidx[0,2], :]]
+titlestr = f"among 3 random samples in TRAIN set, {knnidx[0].cpu()} labels {ytsr[knnidx[0].cpu()].numpy()}"
+savestr = f"ep{round(epoch/1000)}k_train_3rnd_%d_%d_%d_GMM" % tuple(knnidx[0].cpu().numpy())
+score_name2plot = ["gmm delta", "gmm_100_mode", "gmm_50_mode", "gmm_20_mode", "gmm_10_mode", "gmm_5_mode", "gmm_2_mode", "gaussian", "mean isotropic", ]
+sigmas = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0]
+score_slice_projection_functional(anchors, edm, score_func_col, score_name2plot, edm_imgshape,
+            sigmas=sigmas, titlestr=titlestr, nrowcols=(2, 5), figsize=(24, 8.7), 
+            figsumdir=figsumdir, savestr=savestr, show_image=True,)
+score_magnitude_projection_functional(anchors, edm, score_func_col, score_name2plot, edm_imgshape, 
+            magnitude="ortho_l2",
+            sigmas=sigmas, titlestr=titlestr, nrowcols=(2, 5), figsize=(24, 8.7), 
+            figsumdir=figsumdir, savestr=savestr, show_image=False,)
+score_magnitude_projection_functional(anchors, edm, score_func_col, score_name2plot, edm_imgshape, 
+            magnitude="proj_l2",
+            sigmas=sigmas, titlestr=titlestr, nrowcols=(2, 5), figsize=(24, 8.7), 
+            figsumdir=figsumdir, savestr=savestr, show_image=False,)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#%% Scratch zone 
+
 #%%
-# TODO: Functional dictionary for score visualization
-print("Defining score functionals")
-score_func_col = {
-    "mean isotropic": lambda Xt, sigma: mean_isotropic_score(Xt, edm_Xmean, sigma).cpu(), 
-    "mean + std isotropic": lambda Xt, sigma: mean_isotropic_score(Xt, edm_Xmean, sigma, sigma0=edm_std_mean).cpu(), 
-    "gaussian": lambda Xt, sigma: Gaussian_score(Xt, edm_Xmean, edm_Xcov, sigma).cpu(), 
-    "gaussian regularize": lambda Xt, sigma: Gaussian_score(Xt, edm_Xmean, edm_Xcov + torch.eye(edm_Xcov.shape[0]).to(device) * 1E-4, sigma).cpu(), 
-    "gmm delta": lambda Xt, sigma: delta_GMM_score(Xt, edm_Xmat, sigma).cpu(), 
-}
+# sample three sampels from training set with the same label / class ytsr
+while True:
+    knnidx = torch.randint(0, edm_Xmat.shape[0], (1, 3))
+    if ytsr[knnidx[0,0]] == ytsr[knnidx[0,1]] and ytsr[knnidx[0,1]] == ytsr[knnidx[0,2]]:
+        break
+
 
 # %% [markdown]
 # ### Demo visualization without functionals 

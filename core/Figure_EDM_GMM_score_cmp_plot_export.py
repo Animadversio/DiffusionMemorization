@@ -175,6 +175,36 @@ visualize_train_run_score_cmp(df_syn_cifar2, plot_var="Dt_residual",
                               train_run_name="CIFAR10 origin EDM 5k epochs early phase",
                               savename="cifar10_edm_gmm_denoiser_residual_ev_early_epochs");
 
+
+# %% [markdown]
+# ### CIFAR EDM trained Late, 50k epochs, Augmented
+tabdir = r"/n/home12/binxuwang/Github/DiffusionMemorization/Tables"
+df_syn_cifar3 = pd.read_csv(join(tabdir, "cifar10_uncond_edm_Aug_50k_epoch_gmm_exp_var.csv"))
+cifar_score_names = ["mean_isotropic", "gaussian", 'gmm_2_mode', 'gmm_5_mode', 'gmm_10_mode', 
+                     'gmm_20_mode', 'gmm_50_mode', 'gmm_100_mode', 'gmm_200_mode', "gmm delta"]
+visualize_train_run_score_cmp(df_syn_cifar3, plot_var="St_residual", 
+                              hue_order=cifar_score_names, 
+                              train_run_name="CIFAR10 origin EDM (Aug) 50k epochs late phase",
+                              savename="cifar10_edm_Aug_gmm_score_residual_ev_late_epochs");
+visualize_train_run_score_cmp(df_syn_cifar3, plot_var="Dt_residual", 
+                              hue_order=cifar_score_names, 
+                              train_run_name="CIFAR10 origin EDM (Aug) 50k epochs late phase",
+                              savename="cifar10_edm_Aug_gmm_denoiser_residual_ev_late_epochs");
+#%%
+# ### CIFAR EDM trained late, 50k epochs no Augmentation
+tabdir = r"/n/home12/binxuwang/Github/DiffusionMemorization/Tables"
+df_syn_cifar4 = pd.read_csv(join(tabdir, "cifar10_uncond_edm_noAug_50k_epoch_gmm_exp_var.csv"))
+cifar_score_names = ["mean_isotropic", "gaussian", 'gmm_2_mode', 'gmm_5_mode', 'gmm_10_mode', 
+                     'gmm_20_mode', 'gmm_50_mode', 'gmm_100_mode', 'gmm_200_mode', "gmm delta"]
+visualize_train_run_score_cmp(df_syn_cifar4, plot_var="St_residual", 
+                              hue_order=cifar_score_names, 
+                              train_run_name="CIFAR10 origin EDM (noAug) 50k epochs late phase",
+                              savename="cifar10_edm_noAug_gmm_score_residual_ev_late_epochs");
+visualize_train_run_score_cmp(df_syn_cifar4, plot_var="Dt_residual", 
+                              hue_order=cifar_score_names, 
+                              train_run_name="CIFAR10 origin EDM (noAug) 50k epochs late phase",
+                              savename="cifar10_edm_noAug_gmm_denoiser_residual_ev_late_epochs");
+
 # %% [markdown]
 # ### AFHQ 64 Dataseet early phase
 df_syn_afhq = pd.read_csv(join(tabdir, "AFHQ_edm_5k_epoch_gmm_exp_var_fixed.csv"))
