@@ -288,6 +288,7 @@ def gaussian_mixture_lowrank_score_batch_sigma_torch(x,
 
 from tqdm import trange, tqdm
 from sklearn.cluster import KMeans, MiniBatchKMeans
+# threadpoolctl is dependency of sklearn 
 def compute_cluster(Xtrain_norm, n_clusters,
                        kmeans_batch=2048, 
                        kmeans_random_seed=0,

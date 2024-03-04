@@ -1,9 +1,10 @@
+#%%
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import Adam, SGD
 from torch.nn.modules.loss import MSELoss
-from tqdm import trange, tqdm #.notebook
+from tqdm.autonotebook import trange, tqdm #.notebook
 import math
 import numpy as np
 import matplotlib.pyplot as plt
@@ -177,6 +178,8 @@ plt.show()
 
 #%% Characterize error across time
 import pandas as pd
+figdir = r"E:\OneDrive - Harvard University\DiffusionMemorization\Figures\GMM2d_figures"
+#%%
 score_model_td3.eval()
 score_model_td3.cpu()
 df_col = []
@@ -241,7 +244,6 @@ plt.show()
 
 
 #%%
-figdir = r"E:\OneDrive - Harvard University\DiffusionMemorization\Figures\GMM2d_figures"
 # visualize the trained score model's score field vs the original score field
 score_model_td3.eval()
 score_model_td3.cpu()
