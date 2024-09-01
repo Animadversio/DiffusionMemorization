@@ -152,10 +152,8 @@ class UNetMLPBlock(torch.nn.Module):
     def forward(self, x, emb):
         orig = x
         x = self.fc0(F.silu(self.norm0(x)))
-        # print(x.shape)
-        # print(emb.shape)
+
         params = self.affine(emb).to(x.dtype) # .unsqueeze(1)
-        # print(params.shape)
         if self.adaptive_scale:
             scale, shift = params.chunk(chunks=2, dim=1)
             x = F.silu(torch.addcmul(shift, self.norm1(x), scale + 1))
@@ -165,7 +163,6 @@ class UNetMLPBlock(torch.nn.Module):
         x = self.fc1(F.dropout(x, p=self.dropout, training=self.training))
         x = x.add_(self.skip(orig) if self.skip is not None else orig)
         x = x * self.skip_scale
-        # print(x.shape)
 
         return x
     
@@ -204,4 +201,28 @@ class ScoreModel_Time_UNetlike_edm(nn.Module):
     # print(pred.shape)
     # print(std_vec.shape)
     pred = pred / std_vec - orig / (1 + std_vec ** 2)
+    return pred
+  
+  
+
+class UNetBlockStyleMLP_backbone(nn.Module):
+  """A time-dependent score-based model."""
+
+  def __init__(self, ndim=2, nlayers=5, nhidden=64, time_embed_dim=64,):
+    super().__init__()
+    self.embed = GaussianFourierProjection(time_embed_dim, scale=1)
+    layers = nn.ModuleList()
+    layers.append(UNetMLPBlock(ndim, nhidden, time_embed_dim))
+    for _ in range(nlayers-2):
+        layers.append(UNetMLPBlock(nhidden, nhidden, time_embed_dim))
+    layers.append(nn.Linear(nhidden, ndim))
+    self.net = layers
+
+  def forward(self, x, t_enc, cond=None):
+    # t_enc : preconditioned version of sigma, usually 
+    # ln_std_vec = torch.log(std_vec) / 4
+    t_embed = self.embed(t_enc)
+    for layer in self.net[:-1]:
+        x = layer(x, t_embed)
+    pred = self.net[-1](x)
     return pred
