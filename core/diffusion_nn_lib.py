@@ -2,6 +2,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn import GroupNorm, Linear
 from core.diffusion_basics_lib import marginal_prob_std
 
 
@@ -124,10 +125,6 @@ class ScoreModel_Time_resnet_edm(nn.Module):
     pred = pred / std_vec - x / (1 + std_vec ** 2)
     return pred
 
-
-import torch
-import torch.nn.functional as F
-from torch.nn import GroupNorm, Linear
 
 class UNetMLPBlock(torch.nn.Module):
     def __init__(self,
