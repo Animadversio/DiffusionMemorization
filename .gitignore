@@ -6,6 +6,11 @@ __pycache__/
 .idea/*
 # C extensions
 *.so
+*.pt
+*.pth
+*.gif
+*.mp4
+*.json
 
 # Distribution / packaging
 .Python
